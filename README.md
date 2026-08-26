@@ -1,9 +1,9 @@
 # Axiom
 
 Axiom is a research project toward a verified, mastery-aware AI tutor for
-mathematics. It started as a graduate assignment on agentic RAG systems; the
-goal here is to build something closer to how a good human tutor works than
-to how a general-purpose chatbot answers a question.
+mathematics. It started from an academic assignment on agentic RAG systems;
+the goal here is to build something closer to how a good human tutor works
+than to how a general-purpose chatbot answers a question.
 
 ## The problem
 
@@ -36,21 +36,23 @@ split and how it's expected to evolve.
 
 ## Status
 
-This repository currently contains a project skeleton: a FastAPI backend
-with health/status endpoints, a React/TypeScript frontend that renders a
-static tutor UI shell, and the documentation describing where this is going.
-No retrieval, no LLM calls, no verification, and no student modeling exist
-yet.
+This repository currently contains a project skeleton, an initial algebra
+knowledge base, and a measured lexical retrieval baseline. No embeddings,
+vector store, LLM calls, verification, or student modeling exist yet.
 
 | Area | Status |
 | --- | --- |
 | Backend skeleton (FastAPI, health/status) | Implemented |
 | Frontend skeleton (mode selector, question form) | Implemented |
-| Agentic RAG (guardrails, VectorDB, web fallback, LangGraph, HITL) | Planned |
+| Algebra knowledge base, chunking, BM25 baseline + evaluation | Implemented |
+| Guardrails, VectorDB, web fallback, LangGraph, HITL | Planned |
 | SymPy-based verification, confidence/abstention | Planned |
 | Student model, misconception diagnosis, hint ladder | Planned |
 | JEEBench / MathTutorBench evaluation | Planned |
 | Lean-based formal verification | Research direction |
+
+Retrieval quality against the current baseline is documented in
+[`docs/retrieval-evaluation.md`](docs/retrieval-evaluation.md).
 
 See [`docs/roadmap.md`](docs/roadmap.md) for the phased plan.
 
@@ -61,11 +63,15 @@ axiom-math-tutor/
 ├── apps/
 │   ├── api/          FastAPI backend (Python, uv)
 │   └── web/          React + TypeScript frontend (Vite)
-├── docs/
-│   ├── architecture.md
-│   ├── roadmap.md
-│   └── decisions/    Architecture decision records
-└── scripts/
+├── data/
+│   ├── manifests/     Source provenance (URL, license, attribution)
+│   ├── corpus/        Normalized, chunked knowledge base (generated)
+│   └── evaluation/    Labeled retrieval queries
+└── docs/
+    ├── architecture.md
+    ├── roadmap.md
+    ├── retrieval-evaluation.md
+    └── decisions/    Architecture decision records
 ```
 
 ## Local setup
@@ -100,6 +106,19 @@ indicator in the top bar shows whether it can reach the API.
 Copy `.env.example` to `.env` in `apps/api` if you want to override defaults.
 Nothing is required to run the current skeleton.
 
+### Knowledge base and retrieval baseline
+
+```bash
+cd apps/api
+uv run python -m axiom.knowledge.ingest    # fetch + chunk the algebra corpus
+uv run python -m axiom.retrieval.evaluate  # BM25 baseline against labeled queries
+```
+
+The chunked corpus and evaluation set are already committed under `data/`,
+so `evaluate` works without running `ingest` first. See
+[`docs/retrieval-evaluation.md`](docs/retrieval-evaluation.md) for what the
+numbers mean.
+
 ## Tests and checks
 
 ```bash
@@ -119,10 +138,10 @@ npm run lint
 ## Roadmap (high level)
 
 - **Phase 0 — Foundation**: repository, tooling, backend/frontend skeleton.
-  *(this is where the project is today)*
 - **Phase 1 — Assignment-complete agentic RAG**: guardrails, knowledge base,
   vector retrieval, web-search fallback, LangGraph workflow, human-in-the-loop
-  feedback.
+  feedback. *(knowledge base and a retrieval baseline exist; this is where
+  the project is today — see `docs/roadmap.md` for the rest of the phase)*
 - **Phase 2 — Verified mathematical reasoning**: problem routing, SymPy
   verification, confidence/abstention, reasoning traces.
 - **Phase 3 — Adaptive tutoring**: student model, misconception diagnosis,

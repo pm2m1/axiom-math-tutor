@@ -24,12 +24,27 @@ functionality.
 
 The minimum scope required by the originating assignment.
 
+**Phase 1A — knowledge base and retrieval evaluation foundation (done):**
+
+- [x] Narrow algebra corpus (equations, inequalities, quadratics), sourced
+      and licensed deliberately — see `data/README.md`
+- [x] Deterministic ingestion: manifest → fetch → chunk, with stable chunk
+      IDs and provenance preserved through the pipeline
+- [x] Hand-checked labeled retrieval evaluation set (50 queries)
+- [x] BM25 lexical retrieval baseline with Hit@k/Recall@5/MRR
+- [x] Confidence investigation: measured whether BM25's top score separates
+      in-scope from out-of-scope queries (it doesn't cleanly — see
+      `docs/retrieval-evaluation.md`) before picking a fallback threshold
+
+**Still open for Phase 1:**
+
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
       prompts, basic prompt-injection resistance)
-- [ ] Curriculum knowledge base: a real, finite set of math reference
-      documents, chunked and embedded
-- [ ] Qdrant-backed vector retrieval over that knowledge base
-- [ ] KB-first retrieval policy with an explicit confidence threshold
+- [ ] Embeddings and Qdrant-backed vector retrieval over the knowledge base,
+      evaluated against the same labeled query set as the BM25 baseline
+- [ ] KB-first retrieval policy with an empirically justified confidence
+      threshold (not chosen arbitrarily — see Phase 1A's confidence
+      investigation for why this is still open)
 - [ ] Web search / MCP fallback triggered only below that threshold
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response
       together with explicit typed state

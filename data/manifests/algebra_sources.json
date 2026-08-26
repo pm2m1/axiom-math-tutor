@@ -1,0 +1,70 @@
+{
+  "sources": [
+    {
+      "document_id": "equations-intro",
+      "title": "An Introduction to Equations",
+      "source_url": "https://en.wikibooks.org/wiki/Algebra/Chapter_3/Equations",
+      "source_name": "Wikibooks: Algebra",
+      "license": "CC BY-SA 4.0",
+      "attribution": "Wikibooks contributors, \"Algebra/Chapter 3/Equations\", Wikibooks",
+      "retrieved": "2026-08-26",
+      "topic": "equations",
+      "subtopic": null
+    },
+    {
+      "document_id": "equations-properties",
+      "title": "Properties of Equality",
+      "source_url": "https://en.wikibooks.org/wiki/Algebra/Chapter_3/Solving_Equations",
+      "source_name": "Wikibooks: Algebra",
+      "license": "CC BY-SA 4.0",
+      "attribution": "Wikibooks contributors, \"Algebra/Chapter 3/Solving Equations\", Wikibooks",
+      "retrieved": "2026-08-26",
+      "topic": "equations",
+      "subtopic": "linear equations"
+    },
+    {
+      "document_id": "inequalities-basics",
+      "title": "Solving Inequalities",
+      "source_url": "https://en.wikibooks.org/wiki/Algebra/Chapter_4/Inequalities",
+      "source_name": "Wikibooks: Algebra",
+      "license": "CC BY-SA 4.0",
+      "attribution": "Wikibooks contributors, \"Algebra/Chapter 4/Inequalities\", Wikibooks",
+      "retrieved": "2026-08-26",
+      "topic": "inequalities",
+      "subtopic": null
+    },
+    {
+      "document_id": "inequalities-absolute-value",
+      "title": "Compound Inequalities",
+      "source_url": "https://en.wikibooks.org/wiki/Algebra/Chapter_4/Compound_and_Absolute_Value_Inequalities",
+      "source_name": "Wikibooks: Algebra",
+      "license": "CC BY-SA 4.0",
+      "attribution": "Wikibooks contributors, \"Algebra/Chapter 4/Compound and Absolute Value Inequalities\", Wikibooks",
+      "retrieved": "2026-08-26",
+      "topic": "inequalities",
+      "subtopic": "absolute value"
+    },
+    {
+      "document_id": "quadratics-completing-square",
+      "title": "Completing the Square",
+      "source_url": "https://en.wikibooks.org/wiki/Algebra/Chapter_9/Completing_the_Square",
+      "source_name": "Wikibooks: Algebra",
+      "license": "CC BY-SA 4.0",
+      "attribution": "Wikibooks contributors, \"Algebra/Chapter 9/Completing the Square\", Wikibooks",
+      "retrieved": "2026-08-26",
+      "topic": "quadratic equations",
+      "subtopic": "completing the square"
+    },
+    {
+      "document_id": "quadratics-formula",
+      "title": "Quadratic Formula",
+      "source_url": "https://en.wikibooks.org/wiki/Algebra/Chapter_9/Quadratic_Equation",
+      "source_name": "Wikibooks: Algebra",
+      "license": "CC BY-SA 4.0",
+      "attribution": "Wikibooks contributors, \"Algebra/Chapter 9/Quadratic Equation\", Wikibooks",
+      "retrieved": "2026-08-26",
+      "topic": "quadratic equations",
+      "subtopic": "quadratic formula and discriminant"
+    }
+  ]
+}

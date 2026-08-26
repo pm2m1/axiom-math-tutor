@@ -18,6 +18,9 @@ apps/web/dist/
 .env
 .env.local
 
+# Downloaded source pages (see data/README.md for provenance / regeneration)
+/.data/
+
 # Editors / OS
 .vscode/
 .idea/

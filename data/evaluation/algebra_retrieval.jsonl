@@ -1,0 +1,50 @@
+{"id": "alg-ret-001", "query": "What is the definition of an equation?", "relevant_chunk_ids": ["equations-intro-02"], "topic": "equations", "query_type": "definition", "in_scope": true}
+{"id": "alg-ret-002", "query": "How is an equation different from an expression?", "relevant_chunk_ids": ["equations-intro-01"], "topic": "equations", "query_type": "confusable", "in_scope": true}
+{"id": "alg-ret-003", "query": "Why can I do the same operation to both sides of an equation?", "relevant_chunk_ids": ["equations-properties-00"], "topic": "equations", "query_type": "conceptual", "in_scope": true}
+{"id": "alg-ret-004", "query": "Solve 3x + 1 = 4 for x", "relevant_chunk_ids": ["equations-properties-02"], "topic": "equations", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-005", "query": "How do I solve an equation that has the variable on both sides?", "relevant_chunk_ids": ["equations-properties-03"], "topic": "equations", "query_type": "method", "in_scope": true}
+{"id": "alg-ret-006", "query": "5x - 1 = 2x + 2, what is x?", "relevant_chunk_ids": ["equations-properties-03"], "topic": "equations", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-007", "query": "What is the reflexive property of equality?", "relevant_chunk_ids": ["equations-properties-07"], "topic": "equations", "query_type": "definition", "in_scope": true}
+{"id": "alg-ret-008", "query": "List the properties of equality", "relevant_chunk_ids": ["equations-properties-07"], "topic": "equations", "query_type": "formula", "in_scope": true}
+{"id": "alg-ret-009", "query": "What does it mean to solve an equation?", "relevant_chunk_ids": ["equations-properties-10", "equations-intro-02"], "topic": "equations", "query_type": "conceptual", "in_scope": true}
+{"id": "alg-ret-010", "query": "What is a ratio or proportion?", "relevant_chunk_ids": ["equations-properties-09"], "topic": "equations", "query_type": "definition", "in_scope": true}
+{"id": "alg-ret-011", "query": "cross multiplication of Q/R = S/T", "relevant_chunk_ids": ["equations-properties-09"], "topic": "equations", "query_type": "terminology", "in_scope": true}
+{"id": "alg-ret-012", "query": "What is the square root of a number?", "relevant_chunk_ids": ["equations-properties-04"], "topic": "equations", "query_type": "definition", "in_scope": true}
+{"id": "alg-ret-013", "query": "Is the square root of a number always positive?", "relevant_chunk_ids": ["quadratics-completing-square-03"], "topic": "quadratic equations", "query_type": "conceptual", "in_scope": true}
+{"id": "alg-ret-014", "query": "What are the rules for combining square roots and radicals?", "relevant_chunk_ids": ["equations-properties-05"], "topic": "equations", "query_type": "formula", "in_scope": true}
+{"id": "alg-ret-015", "query": "What is the addition property of equality?", "relevant_chunk_ids": ["equations-properties-07"], "topic": "equations", "query_type": "terminology", "in_scope": true}
+{"id": "alg-ret-016", "query": "If a = b and 1 + a = 3, can I replace a with b?", "relevant_chunk_ids": ["equations-properties-07"], "topic": "equations", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-017", "query": "Explain why an equation is like a balance scale", "relevant_chunk_ids": ["equations-intro-02", "equations-properties-00"], "topic": "equations", "query_type": "paraphrase", "in_scope": true}
+{"id": "alg-ret-018", "query": "What is an unknown or variable in algebra?", "relevant_chunk_ids": ["equations-properties-02"], "topic": "equations", "query_type": "definition", "in_scope": true}
+{"id": "alg-ret-019", "query": "How do you know if a number satisfies an inequality?", "relevant_chunk_ids": ["inequalities-basics-00"], "topic": "inequalities", "query_type": "conceptual", "in_scope": true}
+{"id": "alg-ret-020", "query": "What is the difference between < and ≤?", "relevant_chunk_ids": ["inequalities-basics-00"], "topic": "inequalities", "query_type": "confusable", "in_scope": true}
+{"id": "alg-ret-021", "query": "Why does the inequality sign flip when you multiply by a negative number?", "relevant_chunk_ids": ["inequalities-basics-04"], "topic": "inequalities", "query_type": "conceptual", "in_scope": true}
+{"id": "alg-ret-022", "query": "solve 4 - 6x > 22", "relevant_chunk_ids": ["inequalities-basics-03"], "topic": "inequalities", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-023", "query": "What are the properties of inequalities?", "relevant_chunk_ids": ["inequalities-basics-02"], "topic": "inequalities", "query_type": "definition", "in_scope": true}
+{"id": "alg-ret-024", "query": "How do I solve an inequality with the variable in the denominator?", "relevant_chunk_ids": ["inequalities-basics-05", "inequalities-basics-09"], "topic": "inequalities", "query_type": "method", "in_scope": true}
+{"id": "alg-ret-025", "query": "What is the law of trichotomy?", "relevant_chunk_ids": ["inequalities-basics-01", "inequalities-basics-06"], "topic": "inequalities", "query_type": "definition", "in_scope": true}
+{"id": "alg-ret-026", "query": "What is a compound inequality?", "relevant_chunk_ids": ["inequalities-basics-10", "inequalities-absolute-value-00"], "topic": "inequalities", "query_type": "definition", "in_scope": true}
+{"id": "alg-ret-027", "query": "solve x + 6 ≥ 2 and x ≤ 2", "relevant_chunk_ids": ["inequalities-basics-10"], "topic": "inequalities", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-028", "query": "How do you solve an inequality that contains an absolute value?", "relevant_chunk_ids": ["inequalities-basics-11"], "topic": "inequalities", "query_type": "method", "in_scope": true}
+{"id": "alg-ret-029", "query": "solve |x - 6| < 5", "relevant_chunk_ids": ["inequalities-basics-11"], "topic": "inequalities", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-030", "query": "What does |x| > 12 mean and how do I solve it?", "relevant_chunk_ids": ["inequalities-absolute-value-03"], "topic": "inequalities", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-031", "query": "real world example of a compound inequality", "relevant_chunk_ids": ["inequalities-absolute-value-01", "inequalities-absolute-value-02"], "topic": "inequalities", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-032", "query": "using absolute value to check if a measurement is within range", "relevant_chunk_ids": ["inequalities-absolute-value-04"], "topic": "inequalities", "query_type": "paraphrase", "in_scope": true}
+{"id": "alg-ret-033", "query": "How do you graph an inequality that uses 'and' versus 'or'?", "relevant_chunk_ids": ["inequalities-basics-10"], "topic": "inequalities", "query_type": "method", "in_scope": true}
+{"id": "alg-ret-034", "query": "graph x > 3 or x < 2 on a number line", "relevant_chunk_ids": ["inequalities-absolute-value-00"], "topic": "inequalities", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-035", "query": "What is completing the square used for?", "relevant_chunk_ids": ["quadratics-completing-square-00"], "topic": "quadratic equations", "query_type": "conceptual", "in_scope": true}
+{"id": "alg-ret-036", "query": "solve 2x^2 + 24x + 23 = 0 by completing the square", "relevant_chunk_ids": ["quadratics-completing-square-02"], "topic": "quadratic equations", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-037", "query": "steps to complete the square for ax^2+bx+c", "relevant_chunk_ids": ["quadratics-completing-square-00", "quadratics-completing-square-01"], "topic": "quadratic equations", "query_type": "method", "in_scope": true}
+{"id": "alg-ret-038", "query": "What is the quadratic formula and where does it come from?", "relevant_chunk_ids": ["quadratics-formula-00"], "topic": "quadratic equations", "query_type": "formula", "in_scope": true}
+{"id": "alg-ret-039", "query": "What does the discriminant tell me about the roots?", "relevant_chunk_ids": ["quadratics-formula-01"], "topic": "quadratic equations", "query_type": "conceptual", "in_scope": true}
+{"id": "alg-ret-040", "query": "b^2 - 4ac is negative, what kind of solutions does the quadratic have?", "relevant_chunk_ids": ["quadratics-formula-01"], "topic": "quadratic equations", "query_type": "application", "in_scope": true}
+{"id": "alg-ret-041", "query": "How many real solutions does a quadratic equation have when the discriminant is zero?", "relevant_chunk_ids": ["quadratics-formula-01"], "topic": "quadratic equations", "query_type": "paraphrase", "in_scope": true}
+{"id": "alg-ret-042", "query": "formula for the roots of ax^2+bx+c=0", "relevant_chunk_ids": ["quadratics-formula-00"], "topic": "quadratic equations", "query_type": "formula", "in_scope": true}
+{"id": "alg-ret-101", "query": "What is the derivative of sin(x)?", "relevant_chunk_ids": [], "topic": "calculus", "query_type": "definition", "in_scope": false}
+{"id": "alg-ret-102", "query": "How do you find the area of a circle?", "relevant_chunk_ids": [], "topic": "geometry", "query_type": "definition", "in_scope": false}
+{"id": "alg-ret-103", "query": "What is the probability of rolling two sixes with two dice?", "relevant_chunk_ids": [], "topic": "probability", "query_type": "application", "in_scope": false}
+{"id": "alg-ret-104", "query": "How do I convert a recipe from cups to grams?", "relevant_chunk_ids": [], "topic": "unrelated", "query_type": "application", "in_scope": false}
+{"id": "alg-ret-105", "query": "What is the capital of France?", "relevant_chunk_ids": [], "topic": "unrelated", "query_type": "definition", "in_scope": false}
+{"id": "alg-ret-106", "query": "Explain the Pythagorean theorem", "relevant_chunk_ids": [], "topic": "geometry", "query_type": "conceptual", "in_scope": false}
+{"id": "alg-ret-107", "query": "integrate x^2 dx from 0 to 1", "relevant_chunk_ids": [], "topic": "calculus", "query_type": "application", "in_scope": false}
+{"id": "alg-ret-108", "query": "What causes seasons on Earth?", "relevant_chunk_ids": [], "topic": "unrelated", "query_type": "conceptual", "in_scope": false}
