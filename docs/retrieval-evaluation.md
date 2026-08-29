@@ -15,8 +15,9 @@ actually separable.
 Seven Wikibooks: Algebra pages, 40 chunks total, covering equations and
 their properties, inequalities, and quadratic equations. See
 `data/README.md` for the source list and the topics deliberately left out.
-Phase 1B reuses this corpus and the Phase 1A evaluation set unchanged — no
-chunk, query, or label was altered to make either retriever look better.
+Phases 1B and 1C reuse this corpus and the Phase 1A evaluation set
+unchanged — no chunk, query, or label was altered to make any retriever
+look better.
 
 ## Labeling process
 
@@ -228,6 +229,123 @@ the corpus size or embedding it synchronously in Phase 1's current
 in-memory design — five minutes to (re-)embed 40 chunks does not scale to a
 real curriculum KB without batching, caching, or a GPU.
 
+## Phase 1C — hybrid retrieval experiment
+
+Phase 1B's paired failure analysis found BM25 and dense mostly fail on
+*different* queries (2 bm25-only successes, 9 dense-only successes, 20 both
+correct). That complementary pattern is the reason to try combining rankings
+rather than picking one retriever.
+
+### Method
+
+[Reciprocal Rank Fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf)
+(Cormack et al., 2009): each component retriever returns its top 10
+candidates (`CANDIDATE_DEPTH`, a quarter of the 40-chunk corpus); a chunk's
+fused score is `sum(1 / (k + rank))` over every list it appears in, using
+`k=60` — the constant from the original paper, not tuned against this
+benchmark. Rank position is fused, not raw score, because BM25's unbounded
+score and dense's cosine similarity aren't on comparable scales.
+`HybridRetriever` (`axiom/retrieval/hybrid.py`) wraps an already-constructed
+`BM25Retriever` and `DenseRetriever` rather than building its own index.
+Ties in fused score break on chunk ID, so ranking doesn't depend on
+insertion order.
+
+```bash
+uv run python -m axiom.retrieval.evaluate --retriever hybrid
+uv run python -m axiom.retrieval.evaluate --retriever compare
+```
+
+### Results
+
+```text
+Metric        BM25   Dense   Hybrid   Hyb-Dns   Hyb-BM25
+Hit@1         0.52   0.69    0.74     +0.05     +0.21
+Hit@3         0.79   0.86    0.88     +0.02     +0.10
+Hit@5         0.86   0.88    0.88     +0.00     +0.02
+Recall@5      0.83   0.87    0.88     +0.01     +0.05
+MRR           0.66   0.78    0.81     +0.03     +0.15
+```
+
+Hybrid beats dense — the stronger of the two baselines — on every metric,
+not just BM25. The gain is concentrated at Hit@1/MRR, the metrics dense
+already improved on over BM25, while Hit@5/Recall@5 are unchanged or
+slightly better: fusion isn't just recovering BM25's ranking on cases dense
+already got into the top 5, it's improving which chunk lands first.
+
+### Query-type breakdown
+
+```text
+                n   BM25 Hit@1   Dense Hit@1   Hybrid Hit@1
+application    11   0.73          0.55          0.82
+conceptual      7   0.29          0.71          0.71
+confusable      2   0.50          0.50          0.50
+definition      8   0.50          0.88          0.88
+formula         4   0.50          0.50          0.50
+method          5   0.40          0.80          0.80
+paraphrase      3   0.67          1.00          0.67
+terminology     2   0.50          0.50          0.50
+```
+
+The notable change is `application`: Phase 1B found dense regressed below
+BM25 here (worked-problem queries where literal token overlap matters).
+Hybrid recovers it, and exceeds BM25 (0.82 vs. 0.73) — rank fusion gives
+BM25's exact-match ranking enough weight to win when dense's semantic
+ranking alone would have lost. `conceptual`, `definition`, and `method`
+hold at dense's improved level. `paraphrase` (n=3) drops from 1.00 to 0.67 —
+one query out of three; too small a group to read as a real regression
+rather than noise.
+
+### Paired top-1 outcome (in-scope queries, n=42)
+
+Relative to dense: hybrid fixes 4 of dense's failures and breaks 2 of
+dense's successes; 3 of the 4 fixes are cases where BM25 also failed, so
+fusion is finding chunks neither component ranked first alone, not just
+picking whichever component was right.
+
+Against Phase 1B's specific complementary cases: hybrid recovers 1 of the 2
+bm25-only successes (`alg-ret-004`, "Solve 3x + 1 = 4 for x") but not the
+other (`alg-ret-016`), and preserves 7 of the 9 dense-only successes,
+losing `alg-ret-013` ("Is the square root of a number always positive?")
+and `alg-ret-032` ("using absolute value to check if a measurement is
+within range") — both cases where BM25's competing candidate outranked the
+correct one enough in the fused score to win. Hybrid is not a strict
+superset of what either component gets right.
+
+### Confidence investigation
+
+```text
+Top-1 score, in-scope      n=42  min=0.03  median=0.03  max=0.03  mean=0.03
+Top-1 score, out-of-scope  n=8   min=0.03  median=0.03  max=0.03  mean=0.03
+```
+
+RRF's fused score has almost no dynamic range here — most top-1 scores
+round to the same two decimal places regardless of scope, because with
+`k=60` the difference between rank 1 and rank 2 in either list is tiny
+(`1/61` vs. `1/62`), and a top-1 hit is usually rank 1 or 2 in both
+component lists. This makes RRF's own score a *worse* candidate for a
+KB-sufficiency signal than either BM25's or dense's raw score, not a
+better one — it's a ranking score by design, not a calibrated estimate of
+relevance. As with Phase 1A/1B, no threshold is set, and the 8-query
+out-of-scope sample remains too small to support one either way.
+
+### Performance
+
+CPU-only, descriptive only: hybrid's own construction is free (it embeds
+nothing; it reuses the bm25/dense retrievers built for the comparison run).
+Per-query hybrid retrieval (6.43s / 50 queries, 128.6ms/query) is
+essentially dense's query time (6.39s, 127.8ms/query) plus BM25's
+negligible cost — fusing 20 candidates per query is not the bottleneck.
+
+### Limitations specific to Phase 1C
+
+- `k=60` and depth=10 were fixed from convention/corpus size, not searched;
+  a different constant or depth was not tried.
+- The `paraphrase` regression (1 of 3 queries) and the two lost dense-only
+  successes are each single-digit-count findings on a 50-query benchmark —
+  suggestive, not conclusive.
+- Only two components were fused. No reranking, no weighting one retriever
+  above the other, no third signal.
+
 ## Limitations
 
 - **LaTeX leakage.** Formulas are extracted from MediaWiki's `alttext`
@@ -255,13 +373,13 @@ real curriculum KB without batching, caching, or a GPU.
 
 ## Next steps
 
-Phase 1B shows dense retrieval measurably outperforms BM25 on this corpus
-and query set, concentrated on paraphrase/conceptual/definition queries,
-while being no better (and on `application` queries, slightly worse) where
-literal term overlap already works. It does not show that dense similarity
-solves KB-sufficiency routing — that overlap problem persists proportionally
-across both retrievers. The most direct next experiment is BM25+dense hybrid
-retrieval (combine both rankings rather than replace one with the other,
-since their failure cases are largely disjoint per the paired analysis
-above) evaluated against this same query set, before considering Qdrant,
-reranking, or a second embedding model.
+Phase 1C shows RRF hybrid retrieval beats dense — the stronger single
+baseline — on every metric, recovers most of dense's regression on
+`application` queries, and does so without a new dependency or a tuned
+constant. It is not a strict improvement over dense on every query (2 of
+dense's 9 unique successes are lost), and it does not solve KB-sufficiency
+routing — RRF's fused score has less usable dynamic range than either
+component's raw score, not more. Given hybrid is now the best-measured
+retrieval algorithm on this benchmark, the next step is deciding whether it
+becomes the one that gets Qdrant-backed persistent infrastructure, not
+adding more retrieval algorithms first.

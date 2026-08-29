@@ -49,16 +49,29 @@ The minimum scope required by the originating assignment.
       in-scope/out-of-scope overlap is proportionally similar to BM25's, not
       meaningfully cleaner — see `docs/retrieval-evaluation.md`
 
+**Phase 1C — hybrid retrieval experiment (done):**
+
+- [x] Reciprocal Rank Fusion of BM25 and dense rankings (`HybridRetriever`,
+      same `Retriever` protocol), evaluated against the identical corpus and
+      query set — still in-memory, no Qdrant
+- [x] Beats dense — the stronger single baseline — on every metric (Hit@1
+      +0.05, MRR +0.03) and recovers most of dense's regression on
+      `application` queries, without a new dependency or a tuned constant
+- [x] Repeated the confidence investigation for RRF scores: fused score has
+      less usable dynamic range than either component's own score, not
+      more — see `docs/retrieval-evaluation.md`
+
 **Still open for Phase 1:**
 
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
       prompts, basic prompt-injection resistance)
-- [ ] Qdrant-backed vector retrieval (the Phase 1B dense retriever is
-      in-memory; moving it to Qdrant is a separate, deliberately deferred
-      infrastructure change — see `docs/retrieval-evaluation.md`)
+- [ ] Qdrant-backed vector retrieval (the Phase 1B/1C retrievers are
+      in-memory; moving the best-measured one to Qdrant is a separate,
+      deliberately deferred infrastructure change — see
+      `docs/retrieval-evaluation.md`)
 - [ ] KB-first retrieval policy with an empirically justified confidence
-      threshold (not chosen arbitrarily — neither Phase 1A's nor Phase 1B's
-      confidence investigation found one yet)
+      threshold (not chosen arbitrarily — none of Phase 1A's, 1B's, or 1C's
+      confidence investigations found one yet)
 - [ ] Web search / MCP fallback triggered only below that threshold
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response
       together with explicit typed state

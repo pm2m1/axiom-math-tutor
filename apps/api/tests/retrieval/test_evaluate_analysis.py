@@ -5,6 +5,7 @@ from axiom.retrieval.evaluate import (
     QueryResult,
     breakdown_by_query_type,
     compute_metrics,
+    hybrid_component_analysis,
     paired_top1_failures,
     score_distribution,
 )
@@ -91,3 +92,34 @@ def test_score_distribution_splits_by_scope() -> None:
     assert "n=4" in in_scope
     assert "mean=4.50" in in_scope
     assert "n=1" in out_of_scope
+
+
+# Built against _BM25_RESULTS/_DENSE_RESULTS above, where bm25-only successes
+# are c1, c4 and dense-only successes are c2, c3. Hybrid here recovers c1 but
+# not c4, and preserves c2 but not c3, to exercise both outcomes.
+_HYBRID_RESULTS = [
+    QueryResult(_CASES[0], ["x1", "y", "z"], 0.5),
+    QueryResult(_CASES[1], ["x2", "y", "z"], 0.5),
+    QueryResult(_CASES[2], ["y", "x3", "z"], 0.4),
+    QueryResult(_CASES[3], ["y", "x4", "z"], 0.4),
+    QueryResult(_CASES[4], ["y", "z"], 0.2),
+]
+
+
+def test_hybrid_component_analysis_categorizes_against_dense_and_bm25() -> None:
+    analysis = hybrid_component_analysis(_BM25_RESULTS, _DENSE_RESULTS, _HYBRID_RESULTS)
+
+    assert analysis.fixes_dense_failure == 1
+    assert analysis.breaks_dense_success == 1
+    assert analysis.correct_where_both_failed == 0
+    assert analysis.wrong_where_component_correct == 2
+    assert len(analysis.disagreements) == 2
+
+
+def test_hybrid_component_analysis_tracks_recovery_and_preservation() -> None:
+    analysis = hybrid_component_analysis(_BM25_RESULTS, _DENSE_RESULTS, _HYBRID_RESULTS)
+
+    assert analysis.bm25_only_recovered == 1
+    assert analysis.bm25_only_total == 2
+    assert analysis.dense_only_preserved == 1
+    assert analysis.dense_only_total == 2

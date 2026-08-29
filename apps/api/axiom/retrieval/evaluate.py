@@ -2,18 +2,21 @@
 
     uv run python -m axiom.retrieval.evaluate --retriever bm25
     uv run python -m axiom.retrieval.evaluate --retriever dense
+    uv run python -m axiom.retrieval.evaluate --retriever hybrid
     uv run python -m axiom.retrieval.evaluate --retriever compare
 
 Loads the committed corpus and labeled query set and runs it through one or
-both retrievers. `compare` re-runs both (no hardcoded Phase 1A numbers) and
-adds a query-type breakdown and a paired top-1 failure analysis. See
-docs/retrieval-evaluation.md for what these numbers mean and their
-limitations — in particular the out-of-scope sample is only 8 queries, too
-few to support a confident KB-sufficiency threshold.
+all retrievers. `compare` re-runs bm25, dense, and hybrid (no hardcoded
+numbers from earlier phases) and adds a query-type breakdown and paired
+top-1 failure analysis. See docs/retrieval-evaluation.md for what these
+numbers mean and their limitations — in particular the out-of-scope sample
+is only 8 queries, too few to support a confident KB-sufficiency threshold.
 """
 
 import argparse
+import io
 import statistics
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +27,7 @@ from axiom.knowledge.models import KnowledgeChunk
 from axiom.retrieval.base import Retriever
 from axiom.retrieval.bm25 import BM25Retriever
 from axiom.retrieval.dense import DenseRetriever, SentenceTransformerEmbedder
+from axiom.retrieval.hybrid import CANDIDATE_DEPTH, RRF_K, HybridRetriever
 from axiom.retrieval.metrics import hit_at_k, recall_at_k, reciprocal_rank
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -171,6 +175,107 @@ def paired_top1_failures(
     return PairedFailures(both_correct, bm25_only, dense_only, both_wrong, disagreements)
 
 
+@dataclass
+class HybridAnalysis:
+    fixes_dense_failure: int
+    breaks_dense_success: int
+    correct_where_both_failed: int
+    wrong_where_component_correct: int
+    bm25_only_recovered: int
+    bm25_only_total: int
+    dense_only_preserved: int
+    dense_only_total: int
+    disagreements: list[tuple[QueryResult, QueryResult, QueryResult, str]]
+
+
+def hybrid_component_analysis(
+    bm25_results: list[QueryResult],
+    dense_results: list[QueryResult],
+    hybrid_results: list[QueryResult],
+) -> HybridAnalysis:
+    """How hybrid's top-1 outcome compares to its two components, and
+    specifically whether it recovers Phase 1B's 2 bm25-only successes
+    without losing its 9 dense-only ones."""
+    dense_by_id = {r.case.id: r for r in dense_results}
+    hybrid_by_id = {r.case.id: r for r in hybrid_results}
+    pairwise = paired_top1_failures(bm25_results, dense_results)
+    bm25_only_ids = {b.case.id for b, _, kind in pairwise.disagreements if kind == "bm25_only"}
+    dense_only_ids = {b.case.id for b, _, kind in pairwise.disagreements if kind == "dense_only"}
+
+    fixes = breaks = correct_where_both_failed = wrong_where_component_correct = 0
+    disagreements: list[tuple[QueryResult, QueryResult, QueryResult, str]] = []
+
+    for bm25_result in bm25_results:
+        if not bm25_result.case.in_scope:
+            continue
+        dense_result = dense_by_id[bm25_result.case.id]
+        hybrid_result = hybrid_by_id[bm25_result.case.id]
+        relevant = set(bm25_result.case.relevant_chunk_ids)
+        bm25_ok = hit_at_k(bm25_result.ranked_ids, relevant, 1)
+        dense_ok = hit_at_k(dense_result.ranked_ids, relevant, 1)
+        hybrid_ok = hit_at_k(hybrid_result.ranked_ids, relevant, 1)
+
+        if not dense_ok and hybrid_ok:
+            fixes += 1
+        if dense_ok and not hybrid_ok:
+            breaks += 1
+        if not bm25_ok and not dense_ok and hybrid_ok:
+            correct_where_both_failed += 1
+        if (bm25_ok or dense_ok) and not hybrid_ok:
+            wrong_where_component_correct += 1
+
+        if hybrid_ok != dense_ok:
+            kind = "hybrid_fixes_dense" if hybrid_ok else "hybrid_breaks_dense"
+            disagreements.append((bm25_result, dense_result, hybrid_result, kind))
+
+    def _recovered(case_id: str) -> bool:
+        hybrid_result = hybrid_by_id[case_id]
+        relevant = set(hybrid_result.case.relevant_chunk_ids)
+        return hit_at_k(hybrid_result.ranked_ids, relevant, 1)
+
+    return HybridAnalysis(
+        fixes_dense_failure=fixes,
+        breaks_dense_success=breaks,
+        correct_where_both_failed=correct_where_both_failed,
+        wrong_where_component_correct=wrong_where_component_correct,
+        bm25_only_recovered=sum(1 for cid in bm25_only_ids if _recovered(cid)),
+        bm25_only_total=len(bm25_only_ids),
+        dense_only_preserved=sum(1 for cid in dense_only_ids if _recovered(cid)),
+        dense_only_total=len(dense_only_ids),
+        disagreements=disagreements,
+    )
+
+
+def explain_hybrid(query: str, bm25: Retriever, dense: Retriever) -> None:
+    """Print each candidate's RRF contribution for one query, at
+    CANDIDATE_DEPTH rather than the final result limit. Debugging aid for
+    the comparison output, not a public API."""
+    bm25_hits = {h.chunk.chunk_id: h.rank for h in bm25.search(query, limit=CANDIDATE_DEPTH)}
+    dense_hits = {h.chunk.chunk_id: h.rank for h in dense.search(query, limit=CANDIDATE_DEPTH)}
+
+    rows = []
+    for chunk_id in set(bm25_hits) | set(dense_hits):
+        bm25_contrib = 1.0 / (RRF_K + bm25_hits[chunk_id]) if chunk_id in bm25_hits else 0.0
+        dense_contrib = 1.0 / (RRF_K + dense_hits[chunk_id]) if chunk_id in dense_hits else 0.0
+        rows.append(
+            (
+                chunk_id,
+                bm25_hits.get(chunk_id),
+                dense_hits.get(chunk_id),
+                bm25_contrib,
+                dense_contrib,
+            )
+        )
+    rows.sort(key=lambda r: (-(r[3] + r[4]), r[0]))
+
+    print(f"  RRF breakdown for {query!r}:")
+    for chunk_id, bm25_rank, dense_rank, bm25_c, dense_c in rows[:5]:
+        print(
+            f"    {chunk_id:<32} bm25_rank={bm25_rank!s:<4} dense_rank={dense_rank!s:<4} "
+            f"bm25={bm25_c:.4f} dense={dense_c:.4f} total={bm25_c + dense_c:.4f}"
+        )
+
+
 def _print_metrics(name: str, metrics: Metrics, results: list[QueryResult]) -> None:
     print(f"Retrieval evaluation — {name}")
     print("-" * (24 + len(name)))
@@ -192,81 +297,123 @@ class Timing:
     dense_embed_seconds: float
     bm25_query_seconds: float
     dense_query_seconds: float
+    hybrid_query_seconds: float
 
 
 def _print_comparison(
     bm25_results: list[QueryResult],
     dense_results: list[QueryResult],
+    hybrid_results: list[QueryResult],
+    bm25: Retriever,
+    dense: Retriever,
     timing: Timing,
 ) -> None:
     bm25_metrics = compute_metrics(bm25_results)
     dense_metrics = compute_metrics(dense_results)
+    hybrid_metrics = compute_metrics(hybrid_results)
 
     print("Retriever comparison")
     print("--------------------")
-    print(f"{'Metric':<12}{'BM25':>8}{'Dense':>8}{'Delta':>8}")
-    for label, bm25_value, dense_value in [
-        ("Hit@1", bm25_metrics.hit_at_1, dense_metrics.hit_at_1),
-        ("Hit@3", bm25_metrics.hit_at_3, dense_metrics.hit_at_3),
-        ("Hit@5", bm25_metrics.hit_at_5, dense_metrics.hit_at_5),
-        ("Recall@5", bm25_metrics.recall_at_5, dense_metrics.recall_at_5),
-        ("MRR", bm25_metrics.mrr, dense_metrics.mrr),
+    print(f"{'Metric':<12}{'BM25':>8}{'Dense':>8}{'Hybrid':>8}{'Hyb-Dns':>9}{'Hyb-BM25':>10}")
+    for label, bm25_v, dense_v, hybrid_v in [
+        ("Hit@1", bm25_metrics.hit_at_1, dense_metrics.hit_at_1, hybrid_metrics.hit_at_1),
+        ("Hit@3", bm25_metrics.hit_at_3, dense_metrics.hit_at_3, hybrid_metrics.hit_at_3),
+        ("Hit@5", bm25_metrics.hit_at_5, dense_metrics.hit_at_5, hybrid_metrics.hit_at_5),
+        (
+            "Recall@5",
+            bm25_metrics.recall_at_5,
+            dense_metrics.recall_at_5,
+            hybrid_metrics.recall_at_5,
+        ),
+        ("MRR", bm25_metrics.mrr, dense_metrics.mrr, hybrid_metrics.mrr),
     ]:
-        print(f"{label:<12}{bm25_value:>8.2f}{dense_value:>8.2f}{dense_value - bm25_value:>+8.2f}")
+        print(
+            f"{label:<12}{bm25_v:>8.2f}{dense_v:>8.2f}{hybrid_v:>8.2f}"
+            f"{hybrid_v - dense_v:>+9.2f}{hybrid_v - bm25_v:>+10.2f}"
+        )
 
     print()
     print("By query type (n, Hit@1, MRR):")
     bm25_by_type = breakdown_by_query_type(bm25_results)
     dense_by_type = breakdown_by_query_type(dense_results)
+    hybrid_by_type = breakdown_by_query_type(hybrid_results)
     for query_type in sorted(bm25_by_type):
         n, bm25_hit1, bm25_mrr = bm25_by_type[query_type]
         _, dense_hit1, dense_mrr = dense_by_type[query_type]
+        _, hybrid_hit1, hybrid_mrr = hybrid_by_type[query_type]
         print(
             f"  {query_type:<12} n={n:<3} "
             f"bm25 hit@1={bm25_hit1:.2f} mrr={bm25_mrr:.2f}  "
-            f"dense hit@1={dense_hit1:.2f} mrr={dense_mrr:.2f}"
+            f"dense hit@1={dense_hit1:.2f} mrr={dense_mrr:.2f}  "
+            f"hybrid hit@1={hybrid_hit1:.2f} mrr={hybrid_mrr:.2f}"
         )
 
     print()
-    failures = paired_top1_failures(bm25_results, dense_results)
-    print("Paired top-1 outcome (in-scope queries):")
-    print(f"  both correct   {failures.both_correct}")
-    print(f"  bm25 only      {failures.bm25_only}")
-    print(f"  dense only     {failures.dense_only}")
-    print(f"  both wrong     {failures.both_wrong}")
-    if failures.disagreements:
+    analysis = hybrid_component_analysis(bm25_results, dense_results, hybrid_results)
+    print("Hybrid vs. dense (in-scope top-1):")
+    print(f"  fixes a dense failure             {analysis.fixes_dense_failure}")
+    print(f"  breaks a dense success            {analysis.breaks_dense_success}")
+    print(f"  correct where both failed         {analysis.correct_where_both_failed}")
+    print(f"  wrong where a component was right {analysis.wrong_where_component_correct}")
+    print(
+        f"  bm25-only successes recovered     "
+        f"{analysis.bm25_only_recovered}/{analysis.bm25_only_total}"
+    )
+    print(
+        f"  dense-only successes preserved    "
+        f"{analysis.dense_only_preserved}/{analysis.dense_only_total}"
+    )
+    if analysis.disagreements:
         print()
-        print("Disagreements:")
-        for bm25_result, dense_result, kind in failures.disagreements:
+        print("Hybrid/dense disagreements:")
+        for bm25_result, dense_result, hybrid_result, kind in analysis.disagreements:
             case = bm25_result.case
             print(f"  [{kind}] {case.id}: {case.query!r}")
             print(f"      expected       {case.relevant_chunk_ids}")
             print(f"      bm25 top-1     {bm25_result.ranked_ids[:1]}")
             print(f"      dense top-1    {dense_result.ranked_ids[:1]}")
+            print(f"      hybrid top-1   {hybrid_result.ranked_ids[:1]}")
+
+        print()
+        print("RRF breakdown, first fix and first regression:")
+        for bm25_result, _, _, kind in analysis.disagreements:
+            if kind == "hybrid_fixes_dense":
+                explain_hybrid(bm25_result.case.query, bm25, dense)
+                break
+        for bm25_result, _, _, kind in analysis.disagreements:
+            if kind == "hybrid_breaks_dense":
+                explain_hybrid(bm25_result.case.query, bm25, dense)
+                break
 
     print()
     print("Top-1 score distribution, in-scope queries:")
-    print(f"  bm25   {score_distribution(bm25_results, in_scope=True)}")
-    print(f"  dense  {score_distribution(dense_results, in_scope=True)}")
+    print(f"  bm25    {score_distribution(bm25_results, in_scope=True)}")
+    print(f"  dense   {score_distribution(dense_results, in_scope=True)}")
+    print(f"  hybrid  {score_distribution(hybrid_results, in_scope=True)}")
     print("Top-1 score distribution, out-of-scope queries:")
-    print(f"  bm25   {score_distribution(bm25_results, in_scope=False)}")
-    print(f"  dense  {score_distribution(dense_results, in_scope=False)}")
+    print(f"  bm25    {score_distribution(bm25_results, in_scope=False)}")
+    print(f"  dense   {score_distribution(dense_results, in_scope=False)}")
+    print(f"  hybrid  {score_distribution(hybrid_results, in_scope=False)}")
     print()
-    print("BM25 and dense scores are on different, non-comparable scales —")
-    print("the two distributions above are not meant to be read against each")
-    print("other, only in-scope vs. out-of-scope within the same retriever.")
+    print("Scores are on different, non-comparable scales across retrievers.")
+    print("Hybrid's is an RRF fusion score, a function of rank and candidate")
+    print("depth, not a calibrated relevance probability — none of these")
+    print("should become a KB-sufficiency threshold from this data alone.")
     print()
     n = len(bm25_results)
     print(
         f"Corpus embedding time — bm25: {timing.bm25_embed_seconds:.2f}s  "
-        f"dense: {timing.dense_embed_seconds:.2f}s"
+        f"dense: {timing.dense_embed_seconds:.2f}s  "
+        "(hybrid reuses both retrievers and embeds nothing itself)"
     )
     print(
         f"Query retrieval time, {n} queries — "
         f"bm25: {timing.bm25_query_seconds:.2f}s total "
         f"({timing.bm25_query_seconds / n * 1000:.1f}ms/query)  "
         f"dense: {timing.dense_query_seconds:.2f}s total "
-        f"({timing.dense_query_seconds / n * 1000:.1f}ms/query)"
+        f"({timing.dense_query_seconds / n * 1000:.1f}ms/query)  "
+        f"hybrid: {timing.hybrid_query_seconds:.2f}s total "
+        f"({timing.hybrid_query_seconds / n * 1000:.1f}ms/query)"
     )
     print(
         "These are single local-machine measurements, CPU-only, no batching "
@@ -275,8 +422,17 @@ def _print_comparison(
 
 
 def main() -> None:
+    # Some queries contain math symbols (e.g. ≥) that aren't representable
+    # in Windows' default console/redirect codepage (cp1252); write UTF-8
+    # regardless of terminal so `evaluate.py --retriever compare > file`
+    # doesn't crash partway through.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--retriever", choices=["bm25", "dense", "compare"], default="bm25")
+    parser.add_argument(
+        "--retriever", choices=["bm25", "dense", "hybrid", "compare"], default="bm25"
+    )
     args = parser.parse_args()
 
     chunks = load_chunks()
@@ -291,6 +447,8 @@ def main() -> None:
         dense = DenseRetriever(chunks, SentenceTransformerEmbedder())
         dense_embed_seconds = time.perf_counter() - t0
 
+        hybrid = HybridRetriever(bm25, dense)
+
         t0 = time.perf_counter()
         bm25_results = run_queries(bm25, cases)
         bm25_query_seconds = time.perf_counter() - t0
@@ -299,17 +457,29 @@ def main() -> None:
         dense_results = run_queries(dense, cases)
         dense_query_seconds = time.perf_counter() - t0
 
+        t0 = time.perf_counter()
+        hybrid_results = run_queries(hybrid, cases)
+        hybrid_query_seconds = time.perf_counter() - t0
+
         timing = Timing(
-            bm25_embed_seconds, dense_embed_seconds, bm25_query_seconds, dense_query_seconds
+            bm25_embed_seconds,
+            dense_embed_seconds,
+            bm25_query_seconds,
+            dense_query_seconds,
+            hybrid_query_seconds,
         )
-        _print_comparison(bm25_results, dense_results, timing)
+        _print_comparison(bm25_results, dense_results, hybrid_results, bm25, dense, timing)
         return
 
     retriever: Retriever
     if args.retriever == "bm25":
         retriever = BM25Retriever(chunks)
-    else:
+    elif args.retriever == "dense":
         retriever = DenseRetriever(chunks, SentenceTransformerEmbedder())
+    else:
+        bm25 = BM25Retriever(chunks)
+        dense = DenseRetriever(chunks, SentenceTransformerEmbedder())
+        retriever = HybridRetriever(bm25, dense)
 
     results = run_queries(retriever, cases)
     _print_metrics(args.retriever, compute_metrics(results), results)
