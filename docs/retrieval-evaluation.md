@@ -407,13 +407,56 @@ Hybrid Qdrant      0.74    0.88    0.88      0.88  0.81
 
 Identical to five significant figures at this precision. Ranking agreement,
 not just aggregate metrics: dense local vs. Qdrant dense agree on the top-1
-result for all 50 queries, mean top-5 Jaccard overlap 1.00. Hybrid local
-vs. Qdrant hybrid also agree on top-1 for all 50 queries; mean top-5
-overlap is 0.99, not exactly 1.00 — Qdrant's HNSW search is approximate,
-not the exact brute-force cosine `DenseRetriever` computes in NumPy, so a
-handful of low-ranked candidates beyond the top few can order slightly
-differently and occasionally shift which chunk RRF pulls into a fused
-top-5. This didn't change any query's top-1 outcome or any metric above.
+result for all 50 queries, and on the top-5 *set* for all 50 (mean Jaccard
+1.00) — though for 2 of those 50 the order within an unchanged set differs
+at rank 3+. Hybrid local vs. Qdrant hybrid also agree on top-1 for all 50
+queries; mean top-5 Jaccard is 0.99, not exactly 1.00, because RRF's
+rank-sensitivity turns one of those ordering differences into an actual
+top-5 set change for a different query. See "Ranking difference,
+investigated" below for what was actually confirmed about the cause. None
+of this changed any query's top-1 outcome or any metric above.
+
+### Ranking difference, investigated
+
+Qdrant's local mode does not use HNSW or another approximate index — its
+search computes cosine similarity over every stored vector and sorts
+exactly (`qdrant_client.local.local_collection`, confirmed by reading the
+installed package: a full `np.argsort` over the complete score array, no
+approximate graph traversal). The earlier draft of this document attributed
+the ranking difference to HNSW; that was wrong for this configuration and
+has been corrected.
+
+Reproduced directly with the real corpus and model: local `DenseRetriever`
+and `QdrantDenseRetriever` disagree on ranking *order* — not on which
+chunks are retrieved — for 2 of 50 queries:
+
+- `alg-ret-034` ("graph x > 3 or x < 2 on a number line"): local scores
+  `inequalities-basics-06` and `-10` as an exact tie, 0.712402 both: Qdrant
+  scores them 0.712274 and 0.712447, breaking the tie the other way.
+- `alg-ret-039` ("What does the discriminant tell me about the roots?"):
+  local and Qdrant both place `quadratics-completing-square-01`/`-02` at
+  4th/5th but disagree on which is which; the gap is under 0.0005 either
+  way.
+
+Propagated through RRF, which is sensitive to rank rather than raw score,
+this becomes a genuine top-5 *set* change for a third query, `alg-ret-016`
+("If a = b and 1 + a = 3, can I replace a with b?"): the fifth-ranked chunk
+in the fused result is `inequalities-basics-06` locally and
+`quadratics-completing-square-01` via Qdrant.
+
+A concrete, evidence-based contributing factor: `SentenceTransformerEmbedder.encode`
+returns `float16` embeddings (confirmed), and Qdrant's local-mode cosine
+similarity re-normalizes both query and stored vectors at search time
+(`qdrant_client.local.distances.cosine_similarity`), even though
+`DenseRetriever` already normalizes during encoding and takes a raw dot
+product instead of repeating that step. The two paths can therefore
+accumulate slightly different floating-point rounding — consistent with
+the sub-0.0005 gaps observed in every differing case. This experiment did
+not isolate that as the sole cause with a controlled test (e.g. feeding
+identical float64 vectors through both paths), so it should be read as a
+well-evidenced contributing factor, not a fully proven single explanation.
+In every case observed, the affected candidates were tied or nearly tied;
+top-1 and every aggregate metric were unaffected.
 
 ### Performance
 
@@ -437,8 +480,10 @@ only opens the existing collection and embeds 50 queries.
   deployment (concurrent readers/writers, network access); it validates
   storage and ranking parity, not deployment architecture.
 - Parity was measured on the same 40-chunk, 50-query benchmark as every
-  earlier phase — a larger corpus could behave differently, particularly
-  around HNSW's approximate search.
+  earlier phase — a larger corpus could behave differently, and this
+  configuration's exact local-mode search doesn't test how parity holds up
+  against Qdrant's approximate (HNSW) search, which is what a
+  larger, server-mode deployment would actually use.
 
 ## Limitations
 
