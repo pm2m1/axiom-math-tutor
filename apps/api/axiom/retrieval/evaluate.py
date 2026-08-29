@@ -8,19 +8,25 @@
     uv run python -m axiom.retrieval.evaluate --retriever compare
     uv run python -m axiom.retrieval.evaluate --retriever parity
     uv run python -m axiom.retrieval.evaluate --retriever server-parity
+    uv run python -m axiom.retrieval.evaluate --retriever bm25-parity
+    uv run python -m axiom.retrieval.evaluate --retriever native-rrf-parity
 
 Loads the committed corpus and labeled query set and runs it through one or
-more retrievers. `qdrant-dense`/`qdrant-hybrid` and `qdrant-dense`'s
-underlying client target embedded local storage by default, or a Qdrant
-server if `AXIOM_QDRANT_URL` is set — see compose.yaml. `compare` re-runs
-bm25/dense/hybrid (Phase 1B/1C); `parity` additionally re-runs Qdrant
-(always embedded) and checks it ranks the same way as its local NumPy
-counterpart (Phase 1D); `server-parity` compares embedded Qdrant against a
-real Qdrant server, both dense and hybrid, and requires `AXIOM_QDRANT_URL`
-(Phase 1E). No numbers here are hardcoded from earlier phases. See
-docs/retrieval-evaluation.md for what these numbers mean and their
-limitations — in particular the out-of-scope sample is only 8 queries, too
-few to support a confident KB-sufficiency threshold.
+more retrievers. `qdrant-*` retrievers target embedded local storage by
+default, or a Qdrant server if `AXIOM_QDRANT_URL` is set — see
+compose.yaml; `qdrant-bm25`/`qdrant-bm25-hybrid`/`qdrant-native-hybrid`/
+`bm25-parity`/`native-rrf-parity` need a real server specifically, since
+Qdrant's native BM25 has no embedded-mode implementation (Phase 1F).
+`compare` re-runs bm25/dense/hybrid (Phase 1B/1C); `parity` re-runs Qdrant
+dense (always embedded) against local NumPy (Phase 1D); `server-parity`
+compares embedded Qdrant against a real server (Phase 1E); `bm25-parity`
+compares our rank_bm25 lexical baseline against Qdrant's own server-side
+BM25 (Phase 1F-A); `native-rrf-parity` compares application-side RRF
+against Qdrant's native Query API fusion, both over the same Qdrant BM25 +
+Qdrant dense candidates (Phase 1F-B). No numbers here are hardcoded from
+earlier phases. See docs/retrieval-evaluation.md for what these numbers
+mean and their limitations — in particular the out-of-scope sample is only
+8 queries, too few to support a confident KB-sufficiency threshold.
 """
 
 import argparse
@@ -41,7 +47,9 @@ from axiom.retrieval.dense import DenseRetriever, SentenceTransformerEmbedder
 from axiom.retrieval.hybrid import CANDIDATE_DEPTH, RRF_K, HybridRetriever
 from axiom.retrieval.metrics import hit_at_k, recall_at_k, reciprocal_rank
 from axiom.retrieval.qdrant_store import (
+    QdrantBM25Retriever,
     QdrantDenseRetriever,
+    QdrantNativeHybridRetriever,
     create_client,
     create_local_client,
     create_server_client,
@@ -623,6 +631,100 @@ def _print_server_parity(
     )
 
 
+def _print_bm25_parity(
+    existing_results: list[QueryResult], qdrant_results: list[QueryResult]
+) -> None:
+    """1F-A: our rank_bm25.BM25Okapi baseline vs. Qdrant's own server-side
+    BM25 — same 50 queries, different tokenizer/stemmer/stopword defaults.
+    See docs/retrieval-evaluation.md for what preprocessing differs."""
+    existing_metrics = compute_metrics(existing_results)
+    qdrant_metrics = compute_metrics(qdrant_results)
+
+    print("BM25 lexical parity (1F-A)")
+    print("---------------------------")
+    print(f"{'Metric':<12}{'rank_bm25':>10}{'Qdrant BM25':>13}")
+    for label, existing_v, qdrant_v in [
+        ("Hit@1", existing_metrics.hit_at_1, qdrant_metrics.hit_at_1),
+        ("Hit@3", existing_metrics.hit_at_3, qdrant_metrics.hit_at_3),
+        ("Hit@5", existing_metrics.hit_at_5, qdrant_metrics.hit_at_5),
+        ("Recall@5", existing_metrics.recall_at_5, qdrant_metrics.recall_at_5),
+        ("MRR", existing_metrics.mrr, qdrant_metrics.mrr),
+    ]:
+        print(f"{label:<12}{existing_v:>10.2f}{qdrant_v:>13.2f}")
+
+    n = len(existing_results)
+    print()
+    top1, overlap, differing = ranking_agreement(existing_results, qdrant_results)
+    print(f"Top-1 agreement: {top1}/{n}")
+    print(f"Mean top-5 overlap (Jaccard): {overlap:.2f}")
+
+    print()
+    failures = paired_top1_failures(existing_results, qdrant_results)
+    print("Paired top-1 outcome (in-scope queries):")
+    print(f"  both correct        {failures.both_correct}")
+    print(f"  rank_bm25 only      {failures.bm25_only}")
+    print(f"  Qdrant BM25 only    {failures.dense_only}")
+    print(f"  both wrong          {failures.both_wrong}")
+    if failures.disagreements:
+        print()
+        print("Disagreements:")
+        for existing_result, qdrant_result, kind in failures.disagreements:
+            case = existing_result.case
+            print(f"  [{kind}] {case.id}: {case.query!r}")
+            print(f"      expected        {case.relevant_chunk_ids}")
+            print(f"      rank_bm25 top-1  {existing_result.ranked_ids[:1]}")
+            print(f"      Qdrant BM25 top-1  {qdrant_result.ranked_ids[:1]}")
+
+    print()
+    print("By query type (n, Hit@1, MRR):")
+    existing_by_type = breakdown_by_query_type(existing_results)
+    qdrant_by_type = breakdown_by_query_type(qdrant_results)
+    for query_type in sorted(existing_by_type):
+        n_type, existing_hit1, existing_mrr = existing_by_type[query_type]
+        _, qdrant_hit1, qdrant_mrr = qdrant_by_type[query_type]
+        print(
+            f"  {query_type:<12} n={n_type:<3} "
+            f"rank_bm25 hit@1={existing_hit1:.2f} mrr={existing_mrr:.2f}  "
+            f"qdrant hit@1={qdrant_hit1:.2f} mrr={qdrant_mrr:.2f}"
+        )
+
+
+def _print_native_rrf_parity(
+    app_results: list[QueryResult], native_results: list[QueryResult]
+) -> None:
+    """1F-B: the exact same Qdrant BM25 + Qdrant dense candidates, fused by
+    our application-side RRF (k=60) vs. Qdrant's native Query API fusion
+    (Rrf(k=61) — verified to reproduce k=60 under Qdrant's zero-based rank
+    convention, see NATIVE_RRF_K in qdrant_store.py)."""
+    app_metrics = compute_metrics(app_results)
+    native_metrics = compute_metrics(native_results)
+
+    print("Native RRF parity (1F-B)")
+    print("-------------------------")
+    print(f"{'Metric':<12}{'App RRF':>10}{'Native RRF':>12}")
+    for label, app_v, native_v in [
+        ("Hit@1", app_metrics.hit_at_1, native_metrics.hit_at_1),
+        ("Hit@3", app_metrics.hit_at_3, native_metrics.hit_at_3),
+        ("Hit@5", app_metrics.hit_at_5, native_metrics.hit_at_5),
+        ("Recall@5", app_metrics.recall_at_5, native_metrics.recall_at_5),
+        ("MRR", app_metrics.mrr, native_metrics.mrr),
+    ]:
+        print(f"{label:<12}{app_v:>10.2f}{native_v:>12.2f}")
+
+    n = len(app_results)
+    print()
+    top1, overlap, differing = ranking_agreement(app_results, native_results)
+    print(f"Top-1 agreement: {top1}/{n}")
+    print(f"Mean top-5 overlap (Jaccard): {overlap:.2f}")
+    if differing:
+        print("Top-1 differs:")
+        for app_result, native_result in differing:
+            print(
+                f"  {app_result.case.id}: app={app_result.ranked_ids[:1]} "
+                f"native={native_result.ranked_ids[:1]}"
+            )
+
+
 def main() -> None:
     # Some queries contain math symbols (e.g. ≥) that aren't representable
     # in Windows' default console/redirect codepage (cp1252); write UTF-8
@@ -640,9 +742,14 @@ def main() -> None:
             "hybrid",
             "qdrant-dense",
             "qdrant-hybrid",
+            "qdrant-bm25",
+            "qdrant-bm25-hybrid",
+            "qdrant-native-hybrid",
             "compare",
             "parity",
             "server-parity",
+            "bm25-parity",
+            "native-rrf-parity",
         ],
         default="bm25",
     )
@@ -787,6 +894,46 @@ def main() -> None:
         )
         return
 
+    if args.retriever == "bm25-parity":
+        url = os.environ.get("AXIOM_QDRANT_URL")
+        if not url:
+            parser.error(
+                "--retriever bm25-parity requires AXIOM_QDRANT_URL (Qdrant BM25 needs a server)"
+            )
+
+        existing = BM25Retriever(chunks)
+        qdrant_client = create_server_client(url)
+        qdrant_bm25 = QdrantBM25Retriever(qdrant_client)
+
+        existing_results = run_queries(existing, cases)
+        qdrant_results = run_queries(qdrant_bm25, cases)
+        qdrant_client.close()
+
+        _print_bm25_parity(existing_results, qdrant_results)
+        return
+
+    if args.retriever == "native-rrf-parity":
+        url = os.environ.get("AXIOM_QDRANT_URL")
+        if not url:
+            parser.error(
+                "--retriever native-rrf-parity requires AXIOM_QDRANT_URL "
+                "(Qdrant BM25 needs a server)"
+            )
+
+        qdrant_client = create_server_client(url)
+        embedder = SentenceTransformerEmbedder()
+        qdrant_bm25 = QdrantBM25Retriever(qdrant_client)
+        qdrant_dense = QdrantDenseRetriever(qdrant_client, embedder)
+        app_hybrid = HybridRetriever(qdrant_bm25, qdrant_dense)
+        native_hybrid = QdrantNativeHybridRetriever(qdrant_client, embedder)
+
+        app_results = run_queries(app_hybrid, cases)
+        native_results = run_queries(native_hybrid, cases)
+        qdrant_client.close()
+
+        _print_native_rrf_parity(app_results, native_results)
+        return
+
     retriever: Retriever
     if args.retriever == "bm25":
         retriever = BM25Retriever(chunks)
@@ -800,6 +947,18 @@ def main() -> None:
         qdrant_client = create_client()
         qdrant_dense = QdrantDenseRetriever(qdrant_client, SentenceTransformerEmbedder())
         retriever = HybridRetriever(bm25, qdrant_dense)
+    elif args.retriever == "qdrant-bm25":
+        qdrant_client = create_client()
+        retriever = QdrantBM25Retriever(qdrant_client)
+    elif args.retriever == "qdrant-bm25-hybrid":
+        qdrant_client = create_client()
+        embedder = SentenceTransformerEmbedder()
+        qdrant_bm25 = QdrantBM25Retriever(qdrant_client)
+        qdrant_dense = QdrantDenseRetriever(qdrant_client, embedder)
+        retriever = HybridRetriever(qdrant_bm25, qdrant_dense)
+    elif args.retriever == "qdrant-native-hybrid":
+        qdrant_client = create_client()
+        retriever = QdrantNativeHybridRetriever(qdrant_client, SentenceTransformerEmbedder())
     else:
         bm25 = BM25Retriever(chunks)
         dense = DenseRetriever(chunks, SentenceTransformerEmbedder())

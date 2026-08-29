@@ -86,15 +86,31 @@ The minimum scope required by the originating assignment.
       process restart; not an HNSW/ANN test — this corpus is too small to
       cross Qdrant's full-scan threshold in either deployment mode
 
+**Phase 1F — Qdrant-native lexical retrieval and fusion (done):**
+
+- [x] `QdrantBM25Retriever` (server-side native BM25, English defaults)
+      evaluated independently and in hybrid against `rank_bm25` — similar
+      aggregate lexical metrics but only 30/50 top-1 agreement, and it
+      makes the hybrid worse (Hit@1 0.74→0.67) despite that — see
+      `docs/retrieval-evaluation.md`
+- [x] `QdrantNativeHybridRetriever` (native Query API RRF, k=61 — derived
+      and tested to reproduce our application RRF's k=60 under Qdrant's
+      zero-based rank convention) confirmed near-exact parity with
+      application-side RRF (49/50 top-1 agreement)
+- [x] Validated system unchanged: `rank_bm25` + Qdrant dense + application
+      RRF remains what's recommended, since native BM25 regressed the
+      hybrid; native RRF is a measured, available, but not yet adopted
+      alternative for the fusion step alone
+
 **Still open for Phase 1:**
 
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
       prompts, basic prompt-injection resistance)
-- [ ] Qdrant native BM25 / native RRF (Query API fusion) — a separate,
-      controlled comparison against the current application-side BM25 + RRF
-      now that both storage and deployment mode are Qdrant-backed
+- [ ] Diagnosing why Qdrant BM25 regresses the hybrid despite comparable
+      standalone lexical metrics, before trying a different BM25
+      configuration or reranking
 - [ ] KB-first retrieval policy with an empirically justified confidence
-      threshold (not chosen arbitrarily — none of Phase 1A's through 1D's
+      threshold (not chosen arbitrarily — none of Phase 1A's through 1E's
       confidence investigations found one yet)
 - [ ] Web search / MCP fallback triggered only below that threshold
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response

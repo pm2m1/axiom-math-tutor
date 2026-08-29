@@ -1,14 +1,22 @@
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
 from qdrant_client import QdrantClient
+from qdrant_client.http import models as qmodels
 
 from axiom.knowledge.models import KnowledgeChunk
 from axiom.retrieval.base import Retriever
+from axiom.retrieval.hybrid import RRF_K
 from axiom.retrieval.qdrant_store import (
+    BM25_VECTOR_NAME,
+    NATIVE_RRF_K,
+    QdrantBM25Retriever,
     QdrantDenseRetriever,
+    QdrantNativeHybridRetriever,
+    _to_retrieval_results,
     chunk_to_payload,
     create_client,
     create_local_client,
@@ -195,3 +203,126 @@ def test_create_local_client_ignores_server_url_env_var(
         assert client.collection_exists("axiom_algebra") is False
     finally:
         client.close()
+
+
+def test_ensure_collection_creates_bm25_sparse_vector_with_idf_modifier(
+    client: QdrantClient,
+) -> None:
+    ensure_collection(client, vector_size=2)
+
+    sparse = client.get_collection("axiom_algebra").config.params.sparse_vectors
+    assert sparse is not None
+    assert sparse[BM25_VECTOR_NAME].modifier == qmodels.Modifier.IDF
+
+
+def test_ensure_collection_rejects_collection_missing_bm25_sparse_vector(
+    client: QdrantClient,
+) -> None:
+    # Simulates a collection built before Phase 1F: dense vector only, no
+    # sparse config at all.
+    client.create_collection(
+        "axiom_algebra",
+        vectors_config=qmodels.VectorParams(size=2, distance=qmodels.Distance.COSINE),
+    )
+
+    with pytest.raises(ValueError, match="bm25"):
+        ensure_collection(client, vector_size=2)
+
+
+def test_to_retrieval_results_preserves_rank_score_and_provenance() -> None:
+    chunk = _chunk("a", "about discriminants")
+    points = [
+        qmodels.ScoredPoint(id=1, version=0, score=0.9, payload=chunk_to_payload(chunk)),
+    ]
+
+    results = _to_retrieval_results(points)
+
+    assert results[0].rank == 1
+    assert results[0].score == 0.9
+    assert results[0].chunk.chunk_id == "a"
+    assert results[0].chunk.source_url == "https://example.org/doc"
+
+
+def test_to_retrieval_results_numbers_ranks_from_one_in_order() -> None:
+    points = [
+        qmodels.ScoredPoint(id=1, version=0, score=0.9, payload=chunk_to_payload(_chunk("a", "x"))),
+        qmodels.ScoredPoint(id=2, version=0, score=0.5, payload=chunk_to_payload(_chunk("b", "y"))),
+    ]
+
+    results = _to_retrieval_results(points)
+
+    assert [r.rank for r in results] == [1, 2]
+    assert [r.chunk.chunk_id for r in results] == ["a", "b"]
+
+
+def test_to_retrieval_results_raises_on_missing_payload() -> None:
+    points = [qmodels.ScoredPoint(id=1, version=0, score=0.9, payload=None)]
+
+    with pytest.raises(ValueError, match="payload"):
+        _to_retrieval_results(points)
+
+
+def test_qdrant_bm25_retriever_requires_existing_collection(client: QdrantClient) -> None:
+    with pytest.raises(ValueError):
+        QdrantBM25Retriever(client)
+
+
+def test_qdrant_bm25_retriever_satisfies_retriever_protocol(client: QdrantClient) -> None:
+    ensure_collection(client, vector_size=2)
+    assert isinstance(QdrantBM25Retriever(client), Retriever)
+
+
+def test_native_hybrid_retriever_requires_existing_collection(client: QdrantClient) -> None:
+    with pytest.raises(ValueError):
+        QdrantNativeHybridRetriever(client, FakeEmbedder())
+
+
+def test_native_hybrid_retriever_satisfies_retriever_protocol(client: QdrantClient) -> None:
+    ensure_collection(client, vector_size=2)
+    assert isinstance(QdrantNativeHybridRetriever(client, FakeEmbedder()), Retriever)
+
+
+class _RecordingClient:
+    """Stands in for QdrantClient to inspect the request
+    QdrantNativeHybridRetriever builds, without hitting a real server —
+    this checks the request shape, not Qdrant's fusion behavior itself
+    (verified separately against a real server)."""
+
+    def __init__(self) -> None:
+        self.last_kwargs: dict[str, Any] = {}
+
+    def collection_exists(self, collection_name: str) -> bool:
+        return True
+
+    def query_points(self, collection_name: str, **kwargs: Any) -> qmodels.QueryResponse:
+        self.last_kwargs = kwargs
+        return qmodels.QueryResponse(points=[])
+
+
+def test_native_hybrid_retriever_requests_k61_and_candidate_depth() -> None:
+    client = _RecordingClient()
+    retriever = QdrantNativeHybridRetriever(client, FakeEmbedder())  # type: ignore[arg-type]
+
+    retriever.search("about discriminants", limit=5)
+
+    query = client.last_kwargs["query"]
+    assert isinstance(query, qmodels.RrfQuery)
+    assert query.rrf.k == NATIVE_RRF_K
+    assert all(prefetch.limit == 10 for prefetch in client.last_kwargs["prefetch"])
+
+
+def test_native_rrf_k61_matches_application_rrf_k60_under_rank_conventions() -> None:
+    """Qdrant's Rrf(k=...) uses zero-based rank positions internally; our
+    application RRF (hybrid.py) uses one-based rank. This is the
+    deterministic parity check behind NATIVE_RRF_K=61 — verified
+    analytically here, and empirically against a real server during
+    Phase 1F (see docs/retrieval-evaluation.md)."""
+
+    def application_rrf(one_based_rank: int) -> float:
+        return 1 / (RRF_K + one_based_rank)
+
+    def qdrant_rrf(zero_based_position: int) -> float:
+        return 1 / (zero_based_position + NATIVE_RRF_K)
+
+    for rank in range(1, 11):
+        assert application_rrf(rank) == pytest.approx(qdrant_rrf(rank - 1))

@@ -15,7 +15,7 @@ actually separable.
 Seven Wikibooks: Algebra pages, 40 chunks total, covering equations and
 their properties, inequalities, and quadratic equations. See
 `data/README.md` for the source list and the topics deliberately left out.
-Phases 1B through 1E reuse this corpus and the Phase 1A evaluation set
+Phases 1B through 1F reuse this corpus and the Phase 1A evaluation set
 unchanged — no chunk, query, or label was altered to make any retriever
 look better.
 
@@ -604,6 +604,164 @@ independently-upgradable service), not raw speed.
 - As above, this corpus cannot validate parity under HNSW/approximate
   search; only exact full-scan parity was measured.
 
+## Phase 1F — Qdrant-native lexical retrieval and fusion
+
+Two sequential, separately-measured experiments: 1F-A changes only the
+lexical retriever (`rank_bm25` → Qdrant's own server-side BM25); 1F-B then
+changes only the fusion step (application-side RRF → Qdrant's native Query
+API fusion), keeping the same BM25 and dense candidates from 1F-A fixed.
+Both require a real Qdrant server — Qdrant's native BM25 has no
+embedded/local-mode implementation (confirmed below).
+
+### 1F-A: Qdrant native BM25
+
+**Qdrant native BM25 is a different lexical algorithm, not a storage
+migration of `BM25Retriever`.** It's Qdrant's own server-side sparse
+vector (`bm25`, IDF modifier), computed via server-side text inference
+(`model="Qdrant/bm25"`), with its own English defaults: lowercased,
+Snowball stemmer, default English stopwords, no ASCII folding, BM25
+`k=1.2`, `b=0.75`, `avg_len=256`. None of these were tuned — this is
+Qdrant's first, un-tuned "normal English" configuration, run once and
+reported honestly.
+
+Two things needed verifying before writing any code, both confirmed
+directly against the real running `qdrant/qdrant:v1.19.0` server (not
+assumed from documentation or the client library's own docstrings):
+
+- The `qdrant-client` `Document` model is annotated "WARN: Work-in-progress,
+  unimplemented... requires inference infrastructure, unimplemented" — that
+  warning is accurate for general embedding models needing external
+  inference, but **not** for BM25 specifically: `model="Qdrant/bm25"` is a
+  classical algorithm the server computes natively, with no external
+  service. Verified by upserting and querying raw text directly against
+  the real server and inspecting the resulting sparse vector — it worked.
+  No FastEmbed dependency was needed.
+- Embedded/local mode (`QdrantClient(path=...)`) does **not** support this:
+  it raises `ImportError: fastembed is not installed` for the same
+  `Document` call. Native BM25 is therefore server-only in this project;
+  `QdrantBM25Retriever` requires a real server and fails clearly (not
+  silently) if the collection or server isn't available.
+
+Collection schema: the existing `axiom_algebra` collection gained a named
+sparse vector (`bm25`, IDF modifier) alongside its existing unnamed dense
+vector — the two coexist without the dense vector needing a name of its
+own (verified against the real server). Qdrant cannot add a vector field
+to an existing collection, so this required `index_qdrant.py --recreate`
+(same point IDs, same payload, same dense vector config — confirmed
+unchanged); a fresh collection without `--recreate` fails clearly rather
+than silently missing BM25.
+
+```bash
+docker compose up -d
+cd apps/api
+AXIOM_QDRANT_URL=http://localhost:6333 uv run python -m axiom.retrieval.index_qdrant --recreate
+AXIOM_QDRANT_URL=http://localhost:6333 uv run python -m axiom.retrieval.evaluate --retriever bm25-parity
+```
+
+Results, same 50 queries:
+
+```text
+Metric       rank_bm25  Qdrant BM25
+Hit@1             0.52         0.52
+Hit@3             0.79         0.79
+Hit@5             0.86         0.88
+Recall@5          0.83         0.86
+MRR               0.66         0.67
+```
+
+Aggregate metrics look similar — but top-1 agreement is only **30/50**,
+and mean top-5 Jaccard overlap is **0.46**. The two lexical retrievers
+frequently reach similar overall scores by being right and wrong on
+*different* queries, not the same ones. Query-type breakdown shows this
+concretely: `method` queries improve sharply (Hit@1 0.40→0.80), plausibly
+the Snowball stemmer matching different inflections of "solve" that
+`rank_bm25`'s no-stemming tokenizer treats as distinct tokens. `conceptual`
+and `confusable` queries get worse (0.29→0.14, 0.50→0.00) — for
+`alg-ret-002` ("How is an equation different from an expression?"),
+`rank_bm25` correctly matches `equations-intro-01` on the literal words
+while Qdrant's stemmed/stopword-filtered tokens lose the distinction and
+match a different chunk; a similar literal-phrase-match loss appears in
+`alg-ret-035` ("What is completing the square used for?"), where
+`rank_bm25` keeps "completing the square" as distinguishing tokens but
+Qdrant's stemmed tokens pull in a quadratic-formula chunk instead. These
+are plausible mechanisms consistent with the documented preprocessing
+difference, not proven root causes for every case.
+
+**1F-A hybrid** (same dense retriever, same application RRF, only the
+lexical component swapped):
+
+```text
+Metric      Existing Hybrid   Qdrant-BM25 Hybrid
+Hit@1              0.74               0.67
+Hit@3              0.88               0.83
+Hit@5              0.88               0.88
+Recall@5           0.88               0.87
+MRR                0.81               0.76
+```
+
+Swapping in Qdrant BM25 makes the hybrid *worse* despite the standalone
+lexical comparison looking roughly comparable. The likely reason: Phase
+1C's hybrid worked well because `rank_bm25` and dense fail on largely
+disjoint queries, so RRF's fusion had complementary signal to combine.
+Qdrant BM25's different failure pattern doesn't complement dense the same
+way — a case where a component's standalone quality doesn't predict how
+well it fuses with another retriever.
+
+### 1F-B: Qdrant native RRF
+
+Native fusion via Qdrant's Query API: `Prefetch` the dense and BM25
+candidates (depth 10, unchanged), fused with `RrfQuery(rrf=Rrf(k=...))`.
+`qdrant.Fusion.RRF` (the older, parameterless fusion enum) was **not**
+used — its docstring says "with default parameters" and it accepts no
+`k` at all; the parameterized `models.Rrf(k=..., weights=...)` /
+`models.RrfQuery` genuinely exist in the installed `qdrant-client==1.19.0`
+and were used instead, confirmed by direct inspection
+(`models.Rrf.model_fields`) before writing any code.
+
+**k=61, not k=60.** Qdrant's `Rrf.k` uses zero-based rank positions
+internally; our application RRF (`hybrid.py`) uses one-based rank. This
+isn't a guess — it was derived by constructing a small collection with 3
+points and two prefetches giving known, opposite rank orderings, computing
+our application formula's scores by hand, then querying the real server
+with `Rrf(k=59)`, `Rrf(k=60)`, and `Rrf(k=61)` and comparing: `k=61`
+matched our hand-computed values to float precision; `k=60` and `k=59`
+did not. `test_native_rrf_k61_matches_application_rrf_k60_under_rank_conventions`
+in `test_qdrant_store.py` keeps this derivation checked going forward.
+Equal weights throughout (no `weights` argument) — weighted RRF and DBSF
+were both explicitly out of scope for this phase.
+
+```bash
+AXIOM_QDRANT_URL=http://localhost:6333 uv run python -m axiom.retrieval.evaluate --retriever native-rrf-parity
+```
+
+```text
+Metric         App RRF  Native RRF
+Hit@1             0.67        0.67
+Hit@3             0.83        0.83
+Hit@5             0.88        0.88
+Recall@5          0.87        0.87
+MRR               0.76        0.76
+```
+
+Top-1 agreement 49/50, mean top-5 Jaccard 0.99. The one query that
+differs, `alg-ret-102`, is one of the 8 out-of-scope queries (no relevant
+chunk exists for it either way), so this isn't a real ranking-quality
+difference — it's essentially exact parity. This confirms the k=61
+derivation holds at full benchmark scale, not just the 3-point toy
+example it was derived from.
+
+### Limitations specific to Phase 1F
+
+- Both experiments used Qdrant BM25's completely default configuration —
+  no stemmer/stopword/tokenizer variant was tried, so it isn't known
+  whether a different configuration would close the query-type gaps above.
+- The 1F-A hybrid regression (Qdrant BM25 hurting fusion despite
+  comparable standalone metrics) was observed, not diagnosed further —
+  which specific disagreements drive it wasn't traced query-by-query.
+- Native RRF's fused score is, like application RRF's, a function of rank
+  and depth — not a calibrated relevance probability, and not a
+  KB-sufficiency signal.
+
 ## Limitations
 
 - **LaTeX leakage.** Formulas are extracted from MediaWiki's `alttext`
@@ -635,9 +793,14 @@ Phase 1D confirmed Qdrant-backed storage preserves both the aggregate
 metrics and the query-by-query ranking of Phase 1C's hybrid retriever (the
 reason it's the retriever persisted — see Phase 1C above for why it beat
 dense). Phase 1E confirmed that parity holds moving from embedded storage
-to a real server, with perfect ranking agreement, and that the deployment
-mode is no longer a confound either. With both storage and deployment
-mode settled, the next controlled experiment is Qdrant's native BM25 and
-native RRF (Query API fusion) against the current application-side BM25 +
-RRF, rather than adding a KB-sufficiency threshold, reranking, or a second
-embedding model before that comparison exists.
+to a real server, with perfect ranking agreement. Phase 1F found that
+Qdrant's native RRF is genuine drop-in parity for fusion (49/50 top-1
+agreement, the one difference being an out-of-scope query), but that
+Qdrant's native BM25, despite similar aggregate lexical metrics, actually
+weakens the hybrid relative to `rank_bm25` (Hit@1 0.74→0.67). The current
+validated system therefore keeps `rank_bm25` + Qdrant dense + application
+RRF as the retrieval algorithm; native RRF is an available, measured, but
+not yet adopted alternative to the fusion step specifically. The most
+direct next step is diagnosing *why* Qdrant BM25 fuses worse — which
+specific query-level disagreements drive the regression — before trying
+a different BM25 configuration, reranking, or a KB-sufficiency threshold.
