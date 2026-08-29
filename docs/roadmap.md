@@ -118,6 +118,23 @@ The minimum scope required by the originating assignment.
       rate with an identifiable cause (chunks that name a concept without
       explaining it) — not yet safe to gate an automatic fallback decision
 
+**Phase 1H — evidence-support cross-encoder evaluation (done):**
+
+- [x] Relabeled Phase 1G's `test` split as the historical v1 test set
+      (previously inspected, no longer an untouched holdout) and created a
+      fresh 60-query holdout (`algebra_sufficiency_v2.jsonl`), hand-
+      verified the same way as Phase 1G, evaluated only after model and
+      feature design were frozen — see `docs/kb-sufficiency.md`
+- [x] `cross-encoder/ms-marco-MiniLM-L6-v2` (pinned revision) scored
+      against the selected hybrid retriever's existing top-5 evidence, no
+      reranking, no LLM judge; three approaches compared — retrieval-only,
+      cross-encoder-only, and a combined classifier
+- [x] Real, honest negative result: on the fresh holdout the combined
+      classifier's false-accept rate (0.16) is worse than retrieval-only
+      (0.12), not better; the cross-encoder is fooled by the same topical
+      closeness that fools retrieval on the "mentions but doesn't explain"
+      failure class, and does not correct it
+
 **Still open for Phase 1:**
 
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
@@ -125,12 +142,11 @@ The minimum scope required by the originating assignment.
 - [ ] Diagnosing why Qdrant BM25 regresses the hybrid despite comparable
       standalone lexical metrics, before trying a different BM25
       configuration or reranking
-- [ ] A stronger retrieval-relevance evaluator (cross-encoder or LLM
-      judge) against the Phase 1G sufficiency benchmark, given the
-      scalar/logistic baselines' false-accept rate isn't yet low enough to
-      safely gate a fallback decision
+- [ ] An LLM evidence judge against the Phase 1G/1H sufficiency benchmarks,
+      given Phase 1H's cross-encoder evaluation did not materially reduce
+      false accepts at usable recall
 - [ ] Web search / MCP fallback, gated by whatever sufficiency decision
-      Phase 1G or its successor validates
+      Phase 1G/1H or their successor validates
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response
       together with explicit typed state
 - [ ] Human-in-the-loop feedback capture (thumbs up/down or equivalent,

@@ -126,7 +126,19 @@ def test_gather_evidence_uses_bm25_dense_and_hybrid_retrievers() -> None:
     assert evidence.bm25_hits_ids == ["a", "b"]
     assert evidence.bm25_scores == [9.0, 5.0]
     assert evidence.dense_hits_ids == ["a"]
-    assert evidence.rrf_top_score == 0.03
+    assert evidence.hybrid_hits_ids == ["a"]
+    assert evidence.hybrid_scores == [0.03]
+    assert evidence.hybrid_texts == ["text"]
+
+
+def test_gather_evidence_respects_depth_for_hybrid_retriever() -> None:
+    bm25 = FakeRetriever([])
+    dense = FakeRetriever([])
+    hybrid = FakeRetriever([_hit("a", 0.9, 1), _hit("b", 0.5, 2), _hit("c", 0.1, 3)])
+
+    evidence = gather_evidence(bm25, dense, hybrid, "query", depth=2)
+
+    assert evidence.hybrid_hits_ids == ["a", "b"]
 
 
 def test_gather_evidence_handles_empty_hybrid_result() -> None:
@@ -136,20 +148,34 @@ def test_gather_evidence_handles_empty_hybrid_result() -> None:
 
     evidence = gather_evidence(bm25, dense, hybrid, "query")
 
-    assert evidence.rrf_top_score is None
+    assert evidence.hybrid_hits_ids == []
+    assert evidence.hybrid_texts == []
 
 
 # --- feature extraction, with fake retrieval evidence ---
 
 
-def test_extract_features_computes_top1_and_margin() -> None:
-    evidence = RetrievalEvidence(
-        bm25_hits_ids=["a", "b", "c"],
-        bm25_scores=[9.0, 5.0, 1.0],
-        dense_hits_ids=["a", "d", "e"],
-        dense_scores=[0.8, 0.3, 0.1],
-        rrf_top_score=0.03,
+def _evidence(
+    bm25_ids: list[str],
+    bm25_scores: list[float],
+    dense_ids: list[str],
+    dense_scores: list[float],
+    hybrid_scores: list[float] | None = None,
+) -> RetrievalEvidence:
+    hybrid_scores = hybrid_scores or []
+    return RetrievalEvidence(
+        bm25_hits_ids=bm25_ids,
+        bm25_scores=bm25_scores,
+        dense_hits_ids=dense_ids,
+        dense_scores=dense_scores,
+        hybrid_hits_ids=["a"] * len(hybrid_scores),
+        hybrid_scores=hybrid_scores,
+        hybrid_texts=["text"] * len(hybrid_scores),
     )
+
+
+def test_extract_features_computes_top1_and_margin() -> None:
+    evidence = _evidence(["a", "b", "c"], [9.0, 5.0, 1.0], ["a", "d", "e"], [0.8, 0.3, 0.1], [0.03])
 
     features = extract_features(evidence)
 
@@ -161,46 +187,26 @@ def test_extract_features_computes_top1_and_margin() -> None:
 
 
 def test_extract_features_top1_agreement_true_when_same_chunk() -> None:
-    evidence = RetrievalEvidence(
-        bm25_hits_ids=["a", "b"],
-        bm25_scores=[9.0, 5.0],
-        dense_hits_ids=["a", "c"],
-        dense_scores=[0.8, 0.3],
-        rrf_top_score=0.03,
-    )
+    evidence = _evidence(["a", "b"], [9.0, 5.0], ["a", "c"], [0.8, 0.3], [0.03])
 
     assert extract_features(evidence).top1_agreement == 1.0
 
 
 def test_extract_features_top1_agreement_false_when_different_chunk() -> None:
-    evidence = RetrievalEvidence(
-        bm25_hits_ids=["a"],
-        bm25_scores=[9.0],
-        dense_hits_ids=["b"],
-        dense_scores=[0.8],
-        rrf_top_score=None,
-    )
+    evidence = _evidence(["a"], [9.0], ["b"], [0.8])
 
     assert extract_features(evidence).top1_agreement == 0.0
 
 
 def test_extract_features_top5_overlap_is_jaccard() -> None:
-    evidence = RetrievalEvidence(
-        bm25_hits_ids=["a", "b", "c"],
-        bm25_scores=[9.0, 5.0, 1.0],
-        dense_hits_ids=["a", "b", "d"],
-        dense_scores=[0.8, 0.5, 0.1],
-        rrf_top_score=None,
-    )
+    evidence = _evidence(["a", "b", "c"], [9.0, 5.0, 1.0], ["a", "b", "d"], [0.8, 0.5, 0.1])
 
     # intersection {a, b} = 2, union {a, b, c, d} = 4
     assert extract_features(evidence).top5_overlap == pytest.approx(0.5)
 
 
 def test_extract_features_handles_empty_hits_without_error() -> None:
-    evidence = RetrievalEvidence(
-        bm25_hits_ids=[], bm25_scores=[], dense_hits_ids=[], dense_scores=[], rrf_top_score=None
-    )
+    evidence = _evidence([], [], [], [])
 
     features = extract_features(evidence)
 
@@ -212,13 +218,7 @@ def test_extract_features_handles_empty_hits_without_error() -> None:
 
 
 def test_extract_features_handles_single_hit_margin() -> None:
-    evidence = RetrievalEvidence(
-        bm25_hits_ids=["a"],
-        bm25_scores=[3.0],
-        dense_hits_ids=[],
-        dense_scores=[],
-        rrf_top_score=None,
-    )
+    evidence = _evidence(["a"], [3.0], [], [])
 
     assert extract_features(evidence).bm25_margin == 0.0
 

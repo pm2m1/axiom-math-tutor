@@ -22,6 +22,9 @@ from axiom.retrieval.base import Retriever
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 SUFFICIENCY_PATH = _REPO_ROOT / "data" / "evaluation" / "algebra_sufficiency.jsonl"
+# Phase 1H fresh holdout — created only after the Phase 1H model/feature/
+# threshold design was frozen against the (already-inspected) set above.
+SUFFICIENCY_V2_PATH = _REPO_ROOT / "data" / "evaluation" / "algebra_sufficiency_v2.jsonl"
 
 
 class SufficiencyCase(BaseModel):
@@ -45,7 +48,9 @@ class RetrievalEvidence:
     bm25_scores: list[float]
     dense_hits_ids: list[str]
     dense_scores: list[float]
-    rrf_top_score: float | None
+    hybrid_hits_ids: list[str]
+    hybrid_scores: list[float]
+    hybrid_texts: list[str]
 
 
 def gather_evidence(
@@ -53,13 +58,15 @@ def gather_evidence(
 ) -> RetrievalEvidence:
     bm25_hits = bm25.search(query, limit=depth)
     dense_hits = dense.search(query, limit=depth)
-    hybrid_hits = hybrid.search(query, limit=1)
+    hybrid_hits = hybrid.search(query, limit=depth)
     return RetrievalEvidence(
         bm25_hits_ids=[h.chunk.chunk_id for h in bm25_hits],
         bm25_scores=[h.score for h in bm25_hits],
         dense_hits_ids=[h.chunk.chunk_id for h in dense_hits],
         dense_scores=[h.score for h in dense_hits],
-        rrf_top_score=hybrid_hits[0].score if hybrid_hits else None,
+        hybrid_hits_ids=[h.chunk.chunk_id for h in hybrid_hits],
+        hybrid_scores=[h.score for h in hybrid_hits],
+        hybrid_texts=[h.chunk.text for h in hybrid_hits],
     )
 
 
@@ -127,7 +134,7 @@ def extract_features(evidence: RetrievalEvidence) -> SufficiencyFeatures:
         dense_margin=_margin(evidence.dense_scores),
         top1_agreement=top1_agree,
         top5_overlap=overlap,
-        rrf_top1=evidence.rrf_top_score if evidence.rrf_top_score is not None else 0.0,
+        rrf_top1=_top1(evidence.hybrid_scores),
     )
 
 
@@ -238,22 +245,25 @@ def select_threshold(
 
 
 class LogisticSufficiencyModel:
-    """Small interpretable multi-feature baseline over the six retrieval
-    features above — no query text, only retrieval evidence. Trained on
-    development data only; features are standardized since they're on
-    different scales (BM25 scores are unbounded, cosine/agreement/overlap
-    are bounded in [0, 1])."""
+    """Small interpretable classifier over plain feature vectors — no query
+    text, only retrieval/evidence-support evidence. Takes vectors rather
+    than a fixed feature type so the same wrapper serves both the Phase 1G
+    retrieval-only model (SufficiencyFeatures.vector()) and Phase 1H's
+    combined retrieval + cross-encoder model. Trained on development data
+    only; features are standardized since they're on different scales
+    (BM25 scores are unbounded, cosine/agreement/overlap/CE logits aren't
+    all on the same scale either)."""
 
     def __init__(self, *, random_state: int = 0) -> None:
         self._scaler = StandardScaler()
         self._model = LogisticRegression(random_state=random_state)
 
-    def fit(self, features: list[SufficiencyFeatures], labels: list[bool]) -> None:
-        x = self._scaler.fit_transform([f.vector() for f in features])
+    def fit(self, feature_vectors: list[list[float]], labels: list[bool]) -> None:
+        x = self._scaler.fit_transform(feature_vectors)
         self._model.fit(x, labels)
 
-    def decision_scores(self, features: list[SufficiencyFeatures]) -> list[float]:
-        x = self._scaler.transform([f.vector() for f in features])
+    def decision_scores(self, feature_vectors: list[list[float]]) -> list[float]:
+        x = self._scaler.transform(feature_vectors)
         probabilities: Any = self._model.predict_proba(x)
         return [float(p[1]) for p in probabilities]
 
