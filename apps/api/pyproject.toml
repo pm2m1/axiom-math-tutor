@@ -14,6 +14,7 @@ dependencies = [
     "sentence-transformers>=6.0.0",
     "numpy>=2.4.6",
     "qdrant-client>=1.19.0",
+    "scikit-learn>=1.9.0",
 ]
 
 [dependency-groups]
@@ -44,4 +45,8 @@ strict = true
 
 [[tool.mypy.overrides]]
 module = "rank_bm25"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sklearn.*"
 ignore_missing_imports = true

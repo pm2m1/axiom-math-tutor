@@ -102,6 +102,22 @@ The minimum scope required by the originating assignment.
       hybrid; native RRF is a measured, available, but not yet adopted
       alternative for the fusion step alone
 
+**Phase 1G — KB-sufficiency evaluation foundation (done):**
+
+- [x] New 107-query sufficiency benchmark (`data/evaluation/
+      algebra_sufficiency.jsonl`, human-verified against the actual 40
+      chunks — not LLM-generated and trusted), separate from the Phase 1A
+      retrieval benchmark, with a fixed development/test split
+- [x] Three scalar threshold baselines (BM25/dense/RRF top score) plus one
+      logistic regression over six retrieval-evidence features, thresholds
+      selected on development only, evaluated on the locked test split
+      exactly once — see `docs/kb-sufficiency.md`
+- [x] Real result, not tuned to look good: the classifier separates
+      supported from near-domain-unsupported meaningfully better than
+      chance (85% near-domain rejection) but still has an 11% false-accept
+      rate with an identifiable cause (chunks that name a concept without
+      explaining it) — not yet safe to gate an automatic fallback decision
+
 **Still open for Phase 1:**
 
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
@@ -109,10 +125,12 @@ The minimum scope required by the originating assignment.
 - [ ] Diagnosing why Qdrant BM25 regresses the hybrid despite comparable
       standalone lexical metrics, before trying a different BM25
       configuration or reranking
-- [ ] KB-first retrieval policy with an empirically justified confidence
-      threshold (not chosen arbitrarily — none of Phase 1A's through 1E's
-      confidence investigations found one yet)
-- [ ] Web search / MCP fallback triggered only below that threshold
+- [ ] A stronger retrieval-relevance evaluator (cross-encoder or LLM
+      judge) against the Phase 1G sufficiency benchmark, given the
+      scalar/logistic baselines' false-accept rate isn't yet low enough to
+      safely gate a fallback decision
+- [ ] Web search / MCP fallback, gated by whatever sufficiency decision
+      Phase 1G or its successor validates
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response
       together with explicit typed state
 - [ ] Human-in-the-loop feedback capture (thumbs up/down or equivalent,
