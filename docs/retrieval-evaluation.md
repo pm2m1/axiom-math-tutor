@@ -15,7 +15,7 @@ actually separable.
 Seven Wikibooks: Algebra pages, 40 chunks total, covering equations and
 their properties, inequalities, and quadratic equations. See
 `data/README.md` for the source list and the topics deliberately left out.
-Phases 1B and 1C reuse this corpus and the Phase 1A evaluation set
+Phases 1B, 1C, and 1D reuse this corpus and the Phase 1A evaluation set
 unchanged — no chunk, query, or label was altered to make any retriever
 look better.
 
@@ -346,6 +346,100 @@ negligible cost — fusing 20 candidates per query is not the bottleneck.
 - Only two components were fused. No reranking, no weighting one retriever
   above the other, no third signal.
 
+## Phase 1D — Qdrant-backed persistent dense retrieval
+
+Phase 1B/1C's `DenseRetriever` re-embeds all 40 chunks every process start
+(~200-300s on this CPU-only machine). This phase asks a narrower question
+than "is Qdrant a good vector store": does moving dense storage/search to
+Qdrant preserve the retrieval quality already measured, while embedding the
+corpus once instead of every run? Only the dense retriever's storage/search
+changed — `BM25Retriever` and the RRF fusion in `hybrid.py` are untouched,
+so a `QdrantDenseRetriever` result is directly comparable to Phase 1B/1C's.
+
+### Deployment
+
+`QdrantClient(path=...)` local persistent mode, not a server. The corpus is
+40 chunks; local mode gives real on-disk persistence without adding Docker
+as a project dependency, and this phase only needed collection creation,
+upsert, cosine search, and payload retrieval — all of which local mode
+supports directly. Storage lives at `.data/qdrant/` (git-ignored by the
+existing `/.data/` rule; override with `AXIOM_QDRANT_PATH`). Docker is
+available on this machine but wasn't used — nothing here needed it.
+
+### Collection
+
+`axiom_algebra`: one unnamed dense vector, size 768, cosine distance —
+matching `Alibaba-NLP/gte-modernbert-base` (same model, same pinned
+revision as Phase 1B; no embedding change). `ensure_collection`
+(`axiom/retrieval/qdrant_store.py`) validates an existing collection's
+vector config rather than silently reusing or deleting a mismatched one; a
+`--recreate` flag on the indexing command is required to rebuild it.
+
+Chunk IDs (e.g. `equations-properties-02`) aren't valid Qdrant point IDs, so
+each point's ID is a UUID5 deterministically derived from the chunk ID
+(`point_id_for_chunk`) — re-indexing the same chunk always maps to the same
+point. The payload is the chunk's own `model_dump()`, so `chunk_id` and
+every other provenance field (source URL, license, section) round-trip
+through Qdrant without a separate hand-maintained schema.
+
+### Indexing
+
+```bash
+uv run python -m axiom.retrieval.index_qdrant
+uv run python -m axiom.retrieval.index_qdrant --recreate
+```
+
+Deterministic point IDs mean this is naturally idempotent: indexing the
+committed corpus twice produced 40 points both times, not 80 (`Collection
+created: False` on the second run, confirmed by an actual second run, not
+inferred).
+
+### Results
+
+```text
+Retriever         Hit@1   Hit@3   Hit@5  Recall@5   MRR
+BM25               0.52    0.79    0.86      0.83  0.66
+Dense local        0.69    0.86    0.88      0.87  0.78
+Dense Qdrant       0.69    0.86    0.88      0.87  0.78
+Hybrid local       0.74    0.88    0.88      0.88  0.81
+Hybrid Qdrant      0.74    0.88    0.88      0.88  0.81
+```
+
+Identical to five significant figures at this precision. Ranking agreement,
+not just aggregate metrics: dense local vs. Qdrant dense agree on the top-1
+result for all 50 queries, mean top-5 Jaccard overlap 1.00. Hybrid local
+vs. Qdrant hybrid also agree on top-1 for all 50 queries; mean top-5
+overlap is 0.99, not exactly 1.00 — Qdrant's HNSW search is approximate,
+not the exact brute-force cosine `DenseRetriever` computes in NumPy, so a
+handful of low-ranked candidates beyond the top few can order slightly
+differently and occasionally shift which chunk RRF pulls into a fused
+top-5. This didn't change any query's top-1 outcome or any metric above.
+
+### Performance
+
+CPU-only, single-machine, descriptive: model load 12.83s (shared by both
+dense retrievers); local dense corpus embedding 206.99s; Qdrant collection
+open 0.03s. Query retrieval time is about the same either way (dense local
+6.57s / 50 queries, dense Qdrant 6.51s) — Qdrant only removes the corpus
+embedding step, not per-query embedding, which still happens locally
+through the same `SentenceTransformerEmbedder`. That corpus-embedding step
+is exactly what a second `evaluate.py --retriever qdrant-dense` run
+demonstrates disappearing: it completes in seconds, not ~200s, because it
+only opens the existing collection and embeds 50 queries.
+
+### Limitations specific to Phase 1D
+
+- Qdrant native BM25 and native RRF (Query API fusion) were deliberately
+  not used — this phase isolates dense storage/search as the only changed
+  variable. Both are candidates for a future, separately controlled
+  comparison against the current application-side BM25 + RRF.
+- Local persistent mode does not represent a multi-process production
+  deployment (concurrent readers/writers, network access); it validates
+  storage and ranking parity, not deployment architecture.
+- Parity was measured on the same 40-chunk, 50-query benchmark as every
+  earlier phase — a larger corpus could behave differently, particularly
+  around HNSW's approximate search.
+
 ## Limitations
 
 - **LaTeX leakage.** Formulas are extracted from MediaWiki's `alttext`
@@ -373,13 +467,12 @@ negligible cost — fusing 20 candidates per query is not the bottleneck.
 
 ## Next steps
 
-Phase 1C shows RRF hybrid retrieval beats dense — the stronger single
-baseline — on every metric, recovers most of dense's regression on
-`application` queries, and does so without a new dependency or a tuned
-constant. It is not a strict improvement over dense on every query (2 of
-dense's 9 unique successes are lost), and it does not solve KB-sufficiency
-routing — RRF's fused score has less usable dynamic range than either
-component's raw score, not more. Given hybrid is now the best-measured
-retrieval algorithm on this benchmark, the next step is deciding whether it
-becomes the one that gets Qdrant-backed persistent infrastructure, not
-adding more retrieval algorithms first.
+Phase 1D confirms Qdrant-backed storage preserves both the aggregate
+metrics and the query-by-query ranking of Phase 1C's hybrid retriever (the
+reason it's the retriever now persisted — see Phase 1C above for why it
+beat dense), while eliminating the ~200s corpus re-embedding cost on every
+process start. With dense storage no longer a confound, the next
+controlled experiment is Qdrant's native BM25 and native RRF (Query API
+fusion) against the current application-side BM25 + RRF, rather than
+adding a KB-sufficiency threshold, reranking, or a second embedding model
+before that comparison exists.

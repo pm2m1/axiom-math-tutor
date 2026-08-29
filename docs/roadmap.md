@@ -61,17 +61,29 @@ The minimum scope required by the originating assignment.
       less usable dynamic range than either component's own score, not
       more — see `docs/retrieval-evaluation.md`
 
+**Phase 1D — Qdrant-backed persistent dense retrieval (done):**
+
+- [x] `QdrantDenseRetriever` (local persistent mode) behind the same
+      `Retriever` protocol, storing the same embeddings from the same
+      pinned model; BM25 and RRF fusion untouched — see
+      `docs/retrieval-evaluation.md`
+- [x] Parity confirmed: identical Hit@k/Recall@5/MRR to the in-memory
+      retrievers, 50/50 query top-1 ranking agreement for both dense and
+      hybrid
+- [x] Persistence and idempotency demonstrated with the real 40-chunk
+      corpus: indexing twice produces 40 points, not 80; a fresh process
+      queries the collection in seconds instead of re-embedding for ~200s
+
 **Still open for Phase 1:**
 
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
       prompts, basic prompt-injection resistance)
-- [ ] Qdrant-backed vector retrieval (the Phase 1B/1C retrievers are
-      in-memory; moving the best-measured one to Qdrant is a separate,
-      deliberately deferred infrastructure change — see
-      `docs/retrieval-evaluation.md`)
+- [ ] Qdrant native BM25 / native RRF (Query API fusion) — a separate,
+      controlled comparison against the current application-side BM25 + RRF
+      now that dense storage is Qdrant-backed
 - [ ] KB-first retrieval policy with an empirically justified confidence
-      threshold (not chosen arbitrarily — none of Phase 1A's, 1B's, or 1C's
-      confidence investigations found one yet)
+      threshold (not chosen arbitrarily — none of Phase 1A's, 1B's, 1C's,
+      or 1D's confidence investigations found one yet)
 - [ ] Web search / MCP fallback triggered only below that threshold
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response
       together with explicit typed state

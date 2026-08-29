@@ -37,16 +37,17 @@ split and how it's expected to evolve.
 ## Status
 
 This repository currently contains a project skeleton, an initial algebra
-knowledge base, and a measured comparison of lexical (BM25) and dense
-embedding retrieval baselines. No vector store, LLM calls, verification, or
-student modeling exist yet.
+knowledge base, and a measured comparison of lexical (BM25), dense, hybrid,
+and Qdrant-backed retrieval baselines. No LLM calls, verification, or
+student modeling exist yet, and Qdrant is not wired into any request path —
+it's an evaluation-time persistence layer, not production infrastructure.
 
 | Area | Status |
 | --- | --- |
 | Backend skeleton (FastAPI, health/status) | Implemented |
 | Frontend skeleton (mode selector, question form) | Implemented |
-| Algebra knowledge base, chunking, BM25 + dense retrieval baselines | Implemented |
-| Guardrails, VectorDB, web fallback, LangGraph, HITL | Planned |
+| Algebra knowledge base, chunking, BM25/dense/hybrid/Qdrant retrieval baselines | Implemented |
+| Guardrails, KB-first routing, web fallback, LangGraph, HITL | Planned |
 | SymPy-based verification, confidence/abstention | Planned |
 | Student model, misconception diagnosis, hint ladder | Planned |
 | JEEBench / MathTutorBench evaluation | Planned |
@@ -112,7 +113,9 @@ Nothing is required to run the current skeleton.
 ```bash
 cd apps/api
 uv run python -m axiom.knowledge.ingest    # fetch + chunk the algebra corpus
-uv run python -m axiom.retrieval.evaluate --retriever compare  # BM25 vs. dense against labeled queries
+uv run python -m axiom.retrieval.evaluate --retriever compare  # BM25 vs. dense vs. hybrid
+uv run python -m axiom.retrieval.index_qdrant   # one-time: embed corpus into Qdrant
+uv run python -m axiom.retrieval.evaluate --retriever parity   # local vs. Qdrant-backed
 ```
 
 The chunked corpus and evaluation set are already committed under `data/`,
@@ -141,8 +144,9 @@ npm run lint
 - **Phase 0 — Foundation**: repository, tooling, backend/frontend skeleton.
 - **Phase 1 — Assignment-complete agentic RAG**: guardrails, knowledge base,
   vector retrieval, web-search fallback, LangGraph workflow, human-in-the-loop
-  feedback. *(knowledge base and a retrieval baseline exist; this is where
-  the project is today — see `docs/roadmap.md` for the rest of the phase)*
+  feedback. *(knowledge base, retrieval baselines, and Qdrant-backed
+  persistence exist; this is where the project is today — see
+  `docs/roadmap.md` for the rest of the phase)*
 - **Phase 2 — Verified mathematical reasoning**: problem routing, SymPy
   verification, confidence/abstention, reasoning traces.
 - **Phase 3 — Adaptive tutoring**: student model, misconception diagnosis,

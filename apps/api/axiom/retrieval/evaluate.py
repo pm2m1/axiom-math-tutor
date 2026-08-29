@@ -3,14 +3,20 @@
     uv run python -m axiom.retrieval.evaluate --retriever bm25
     uv run python -m axiom.retrieval.evaluate --retriever dense
     uv run python -m axiom.retrieval.evaluate --retriever hybrid
+    uv run python -m axiom.retrieval.evaluate --retriever qdrant-dense
+    uv run python -m axiom.retrieval.evaluate --retriever qdrant-hybrid
     uv run python -m axiom.retrieval.evaluate --retriever compare
+    uv run python -m axiom.retrieval.evaluate --retriever parity
 
 Loads the committed corpus and labeled query set and runs it through one or
-all retrievers. `compare` re-runs bm25, dense, and hybrid (no hardcoded
-numbers from earlier phases) and adds a query-type breakdown and paired
-top-1 failure analysis. See docs/retrieval-evaluation.md for what these
-numbers mean and their limitations — in particular the out-of-scope sample
-is only 8 queries, too few to support a confident KB-sufficiency threshold.
+more retrievers. `qdrant-dense`/`qdrant-hybrid` need a collection already
+built by `index_qdrant.py`. `compare` re-runs bm25/dense/hybrid (Phase
+1B/1C); `parity` additionally re-runs the Qdrant-backed retrievers and
+checks they rank the same way as their local counterparts (Phase 1D). No
+numbers here are hardcoded from earlier phases. See
+docs/retrieval-evaluation.md for what these numbers mean and their
+limitations — in particular the out-of-scope sample is only 8 queries, too
+few to support a confident KB-sufficiency threshold.
 """
 
 import argparse
@@ -22,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel
+from qdrant_client import QdrantClient
 
 from axiom.knowledge.models import KnowledgeChunk
 from axiom.retrieval.base import Retriever
@@ -29,6 +36,7 @@ from axiom.retrieval.bm25 import BM25Retriever
 from axiom.retrieval.dense import DenseRetriever, SentenceTransformerEmbedder
 from axiom.retrieval.hybrid import CANDIDATE_DEPTH, RRF_K, HybridRetriever
 from axiom.retrieval.metrics import hit_at_k, recall_at_k, reciprocal_rank
+from axiom.retrieval.qdrant_store import QdrantDenseRetriever, default_storage_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 CORPUS_PATH = _REPO_ROOT / "data" / "corpus" / "algebra_chunks.jsonl"
@@ -276,6 +284,33 @@ def explain_hybrid(query: str, bm25: Retriever, dense: Retriever) -> None:
         )
 
 
+def ranking_agreement(
+    a: list[QueryResult], b: list[QueryResult]
+) -> tuple[int, float, list[tuple[QueryResult, QueryResult]]]:
+    """How closely two retrievers rank the same queries: top-1 agreement
+    count, mean top-5 Jaccard overlap, and the cases where top-1 differs.
+    Used to check ranking parity between a local and a Qdrant-backed
+    retriever — aggregate metrics can be identical while individual queries
+    still rank differently."""
+    b_by_id = {r.case.id: r for r in b}
+    top1_matches = 0
+    overlaps: list[float] = []
+    differing: list[tuple[QueryResult, QueryResult]] = []
+
+    for a_result in a:
+        b_result = b_by_id[a_result.case.id]
+        if a_result.ranked_ids[:1] == b_result.ranked_ids[:1]:
+            top1_matches += 1
+        else:
+            differing.append((a_result, b_result))
+
+        a_top5, b_top5 = set(a_result.ranked_ids[:5]), set(b_result.ranked_ids[:5])
+        union = a_top5 | b_top5
+        overlaps.append(len(a_top5 & b_top5) / len(union) if union else 1.0)
+
+    return top1_matches, statistics.mean(overlaps), differing
+
+
 def _print_metrics(name: str, metrics: Metrics, results: list[QueryResult]) -> None:
     print(f"Retrieval evaluation — {name}")
     print("-" * (24 + len(name)))
@@ -421,6 +456,86 @@ def _print_comparison(
     )
 
 
+@dataclass
+class ParityTiming:
+    model_load_seconds: float
+    corpus_embed_seconds: float
+    qdrant_open_seconds: float
+    dense_query_seconds: float
+    qdrant_dense_query_seconds: float
+
+
+def _print_parity(
+    bm25_results: list[QueryResult],
+    dense_results: list[QueryResult],
+    qdrant_dense_results: list[QueryResult],
+    hybrid_results: list[QueryResult],
+    qdrant_hybrid_results: list[QueryResult],
+    timing: ParityTiming,
+) -> None:
+    print("Qdrant parity comparison")
+    print("------------------------")
+    print(f"{'Retriever':<15}{'Hit@1':>8}{'Hit@3':>8}{'Hit@5':>8}{'Recall@5':>10}{'MRR':>8}")
+    for label, results in [
+        ("BM25", bm25_results),
+        ("Dense local", dense_results),
+        ("Dense Qdrant", qdrant_dense_results),
+        ("Hybrid local", hybrid_results),
+        ("Hybrid Qdrant", qdrant_hybrid_results),
+    ]:
+        m = compute_metrics(results)
+        print(
+            f"{label:<15}{m.hit_at_1:>8.2f}{m.hit_at_3:>8.2f}{m.hit_at_5:>8.2f}"
+            f"{m.recall_at_5:>10.2f}{m.mrr:>8.2f}"
+        )
+
+    n = len(dense_results)
+
+    print()
+    top1, overlap, differing = ranking_agreement(dense_results, qdrant_dense_results)
+    print(f"Dense local vs. Qdrant dense — top-1 agreement: {top1}/{n}")
+    print(f"  mean top-5 overlap (Jaccard): {overlap:.2f}")
+    if differing:
+        print("  top-1 differs:")
+        for local_r, qdrant_r in differing:
+            print(
+                f"    {local_r.case.id}: local={local_r.ranked_ids[:1]} "
+                f"qdrant={qdrant_r.ranked_ids[:1]}"
+            )
+
+    print()
+    top1, overlap, differing = ranking_agreement(hybrid_results, qdrant_hybrid_results)
+    print(f"Hybrid local vs. Qdrant hybrid — top-1 agreement: {top1}/{n}")
+    print(f"  mean top-5 overlap (Jaccard): {overlap:.2f}")
+    if differing:
+        print("  top-1 differs:")
+        for local_r, qdrant_r in differing:
+            print(
+                f"    {local_r.case.id}: local={local_r.ranked_ids[:1]} "
+                f"qdrant={qdrant_r.ranked_ids[:1]}"
+            )
+
+    print()
+    print(
+        "Model load time (shared by dense local and Qdrant dense): "
+        f"{timing.model_load_seconds:.2f}s"
+    )
+    print(
+        f"Corpus embedding time, local dense only: {timing.corpus_embed_seconds:.2f}s "
+        "(Qdrant dense does not repeat this — it queries the collection built by index_qdrant.py)"
+    )
+    print(f"Qdrant collection open time: {timing.qdrant_open_seconds:.2f}s")
+    print(
+        f"Query retrieval time, {n} queries — "
+        f"dense local: {timing.dense_query_seconds:.2f}s total  "
+        f"dense qdrant: {timing.qdrant_dense_query_seconds:.2f}s total"
+    )
+    print(
+        "These are single local-machine measurements, CPU-only — descriptive, "
+        "not a production latency claim."
+    )
+
+
 def main() -> None:
     # Some queries contain math symbols (e.g. ≥) that aren't representable
     # in Windows' default console/redirect codepage (cp1252); write UTF-8
@@ -431,7 +546,17 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--retriever", choices=["bm25", "dense", "hybrid", "compare"], default="bm25"
+        "--retriever",
+        choices=[
+            "bm25",
+            "dense",
+            "hybrid",
+            "qdrant-dense",
+            "qdrant-hybrid",
+            "compare",
+            "parity",
+        ],
+        default="bm25",
     )
     args = parser.parse_args()
 
@@ -471,11 +596,69 @@ def main() -> None:
         _print_comparison(bm25_results, dense_results, hybrid_results, bm25, dense, timing)
         return
 
+    if args.retriever == "parity":
+        bm25 = BM25Retriever(chunks)
+
+        t0 = time.perf_counter()
+        embedder = SentenceTransformerEmbedder()
+        model_load_seconds = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        dense = DenseRetriever(chunks, embedder)
+        corpus_embed_seconds = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        qdrant_client = QdrantClient(path=str(default_storage_path()))
+        qdrant_open_seconds = time.perf_counter() - t0
+        qdrant_dense = QdrantDenseRetriever(qdrant_client, embedder)
+
+        local_hybrid = HybridRetriever(bm25, dense)
+        qdrant_hybrid = HybridRetriever(bm25, qdrant_dense)
+
+        bm25_results = run_queries(bm25, cases)
+
+        t0 = time.perf_counter()
+        dense_results = run_queries(dense, cases)
+        dense_query_seconds = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        qdrant_dense_results = run_queries(qdrant_dense, cases)
+        qdrant_dense_query_seconds = time.perf_counter() - t0
+
+        hybrid_results = run_queries(local_hybrid, cases)
+        qdrant_hybrid_results = run_queries(qdrant_hybrid, cases)
+        qdrant_client.close()
+
+        parity_timing = ParityTiming(
+            model_load_seconds,
+            corpus_embed_seconds,
+            qdrant_open_seconds,
+            dense_query_seconds,
+            qdrant_dense_query_seconds,
+        )
+        _print_parity(
+            bm25_results,
+            dense_results,
+            qdrant_dense_results,
+            hybrid_results,
+            qdrant_hybrid_results,
+            parity_timing,
+        )
+        return
+
     retriever: Retriever
     if args.retriever == "bm25":
         retriever = BM25Retriever(chunks)
     elif args.retriever == "dense":
         retriever = DenseRetriever(chunks, SentenceTransformerEmbedder())
+    elif args.retriever == "qdrant-dense":
+        qdrant_client = QdrantClient(path=str(default_storage_path()))
+        retriever = QdrantDenseRetriever(qdrant_client, SentenceTransformerEmbedder())
+    elif args.retriever == "qdrant-hybrid":
+        bm25 = BM25Retriever(chunks)
+        qdrant_client = QdrantClient(path=str(default_storage_path()))
+        qdrant_dense = QdrantDenseRetriever(qdrant_client, SentenceTransformerEmbedder())
+        retriever = HybridRetriever(bm25, qdrant_dense)
     else:
         bm25 = BM25Retriever(chunks)
         dense = DenseRetriever(chunks, SentenceTransformerEmbedder())

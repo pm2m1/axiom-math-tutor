@@ -164,6 +164,11 @@ reaches for the web before checking its own curriculum content cannot be
 trusted to prefer vetted material, and it's slower and more expensive for
 no benefit on the common case.
 
+Qdrant now persists the dense retriever's vectors (Phase 1D, local mode —
+see `docs/retrieval-evaluation.md`), but the confidence threshold and web
+fallback described here are still unimplemented; retrieval is not yet
+wired into a request path at all.
+
 ## Human feedback philosophy
 
 Human-in-the-loop feedback (student "was this helpful", teacher review of
