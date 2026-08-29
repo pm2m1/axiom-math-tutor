@@ -1,9 +1,11 @@
 """Retrieval metrics over one query's ranked results.
 
-Relevance labels in the evaluation set are binary (a chunk either supports
-the query or it wasn't judged to), so nDCG would carry no more information
-than Recall@k and MRR already do here — it's left out rather than added for
-appearances.
+nDCG is deliberately not implemented here. Hit@k, Recall@5, and MRR were
+enough to characterize the Phase 1A/1B baselines; that's a scope decision,
+not a claim that nDCG is uninformative under binary relevance — some of our
+queries do have more than one labeled relevant chunk, and nDCG would still
+distinguish ranking those higher from ranking them lower. It's worth adding
+if a future comparison needs that distinction.
 """
 
 

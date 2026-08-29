@@ -1,4 +1,5 @@
 from axiom.knowledge.models import KnowledgeChunk
+from axiom.retrieval.base import Retriever
 from axiom.retrieval.bm25 import BM25Retriever, tokenize
 
 
@@ -43,3 +44,8 @@ def test_search_respects_limit() -> None:
     results = retriever.search("equations", limit=3)
 
     assert len(results) == 3
+
+
+def test_bm25_retriever_satisfies_retriever_protocol() -> None:
+    retriever = BM25Retriever([_chunk("a", "sample text")])
+    assert isinstance(retriever, Retriever)

@@ -37,14 +37,15 @@ split and how it's expected to evolve.
 ## Status
 
 This repository currently contains a project skeleton, an initial algebra
-knowledge base, and a measured lexical retrieval baseline. No embeddings,
-vector store, LLM calls, verification, or student modeling exist yet.
+knowledge base, and a measured comparison of lexical (BM25) and dense
+embedding retrieval baselines. No vector store, LLM calls, verification, or
+student modeling exist yet.
 
 | Area | Status |
 | --- | --- |
 | Backend skeleton (FastAPI, health/status) | Implemented |
 | Frontend skeleton (mode selector, question form) | Implemented |
-| Algebra knowledge base, chunking, BM25 baseline + evaluation | Implemented |
+| Algebra knowledge base, chunking, BM25 + dense retrieval baselines | Implemented |
 | Guardrails, VectorDB, web fallback, LangGraph, HITL | Planned |
 | SymPy-based verification, confidence/abstention | Planned |
 | Student model, misconception diagnosis, hint ladder | Planned |
@@ -111,7 +112,7 @@ Nothing is required to run the current skeleton.
 ```bash
 cd apps/api
 uv run python -m axiom.knowledge.ingest    # fetch + chunk the algebra corpus
-uv run python -m axiom.retrieval.evaluate  # BM25 baseline against labeled queries
+uv run python -m axiom.retrieval.evaluate --retriever compare  # BM25 vs. dense against labeled queries
 ```
 
 The chunked corpus and evaluation set are already committed under `data/`,

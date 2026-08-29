@@ -36,15 +36,29 @@ The minimum scope required by the originating assignment.
       in-scope from out-of-scope queries (it doesn't cleanly — see
       `docs/retrieval-evaluation.md`) before picking a fallback threshold
 
+**Phase 1B — dense retrieval experiment (done):**
+
+- [x] Dense embedding retriever (`Alibaba-NLP/gte-modernbert-base`) behind
+      the same `Retriever` protocol as BM25, evaluated against the identical
+      Phase 1A corpus and query set — no in-memory Qdrant yet, that's the
+      next infrastructure step, not this one
+- [x] Side-by-side comparison, query-type breakdown, and paired failure
+      analysis: dense outperforms BM25 on every metric (Hit@1 +0.17, MRR
+      +0.12), concentrated on paraphrase/conceptual/definition queries
+- [x] Repeated the confidence investigation for dense scores: the
+      in-scope/out-of-scope overlap is proportionally similar to BM25's, not
+      meaningfully cleaner — see `docs/retrieval-evaluation.md`
+
 **Still open for Phase 1:**
 
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
       prompts, basic prompt-injection resistance)
-- [ ] Embeddings and Qdrant-backed vector retrieval over the knowledge base,
-      evaluated against the same labeled query set as the BM25 baseline
+- [ ] Qdrant-backed vector retrieval (the Phase 1B dense retriever is
+      in-memory; moving it to Qdrant is a separate, deliberately deferred
+      infrastructure change — see `docs/retrieval-evaluation.md`)
 - [ ] KB-first retrieval policy with an empirically justified confidence
-      threshold (not chosen arbitrarily — see Phase 1A's confidence
-      investigation for why this is still open)
+      threshold (not chosen arbitrarily — neither Phase 1A's nor Phase 1B's
+      confidence investigation found one yet)
 - [ ] Web search / MCP fallback triggered only below that threshold
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response
       together with explicit typed state
