@@ -15,7 +15,7 @@ actually separable.
 Seven Wikibooks: Algebra pages, 40 chunks total, covering equations and
 their properties, inequalities, and quadratic equations. See
 `data/README.md` for the source list and the topics deliberately left out.
-Phases 1B, 1C, and 1D reuse this corpus and the Phase 1A evaluation set
+Phases 1B through 1E reuse this corpus and the Phase 1A evaluation set
 unchanged — no chunk, query, or label was altered to make any retriever
 look better.
 
@@ -485,6 +485,125 @@ only opens the existing collection and embeds 50 queries.
   against Qdrant's approximate (HNSW) search, which is what a
   larger, server-mode deployment would actually use.
 
+## Phase 1E — Qdrant server parity
+
+Phase 1D validated storage/ranking parity for *embedded* Qdrant. This phase
+asks a narrower, infrastructure-only question: can the same validated
+retrieval system move to a real Qdrant server, over HTTP, without changing
+retrieval behavior? It is not an HNSW or approximate-search experiment —
+see below for why this corpus can't answer that question, and what the
+server actually did.
+
+### Server
+
+Docker Compose (`compose.yaml`, repo root), one service:
+
+```yaml
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+```
+
+`qdrant/qdrant:v1.19.0` pinned to match the installed `qdrant-client==1.19.0`
+exactly (confirmed against Docker Hub — a real, existing tag, not
+`:latest`). Storage is a named Docker volume, not a bind mount into the
+Windows filesystem — it isn't Git content and doesn't need a `.gitignore`
+entry. Only port 6333 (REST) is exposed; the client doesn't use gRPC, so
+6334 isn't opened. No TLS, no API key: this is an unauthenticated localhost
+development service, matching Qdrant's own unauthenticated-by-default
+self-hosted behavior, and it must not be exposed beyond localhost. No
+Docker `HEALTHCHECK` is configured — the official image ships without
+curl/wget (a deliberate size/security choice upstream), so a shell-based
+healthcheck isn't cleanly supported; readiness is instead checked at the
+Python client level, in `create_server_client()`, which calls
+`get_collections()` immediately and raises `ConnectionError` rather than
+returning a client that might not work.
+
+### Client configuration
+
+`axiom/retrieval/qdrant_store.py` gained `create_local_client()` and
+`create_server_client(url)`; `create_client()` picks between them based on
+`AXIOM_QDRANT_URL` — set, use the server; unset, use embedded local
+storage (unchanged default). `QdrantDenseRetriever` itself did not change
+at all — only which client gets constructed differs, so embedded and
+server mode share the exact same retrieval code.
+
+```bash
+docker compose up -d
+cd apps/api
+AXIOM_QDRANT_URL=http://localhost:6333 uv run python -m axiom.retrieval.index_qdrant
+AXIOM_QDRANT_URL=http://localhost:6333 uv run python -m axiom.retrieval.evaluate --retriever server-parity
+```
+
+Selecting server mode without a reachable server fails immediately with a
+clear `ConnectionError`, not a silent fallback to embedded mode.
+
+### Persistence
+
+Indexed twice against the running server: 40 points both times
+(`Collection created: True` then `False`, matching Phase 1D's embedded
+idempotency result). Restarted the container (`docker compose restart
+qdrant`, not `down -v`) and queried the collection directly:
+`points_count: 40` — unchanged. A separate, fresh CLI process
+(`evaluate.py --retriever qdrant-dense` pointed at the server) then
+retrieved successfully without re-embedding the corpus.
+
+### Results
+
+```text
+Retriever          Hit@1   Hit@3   Hit@5  Recall@5   MRR
+BM25                0.52    0.79    0.86      0.83  0.66
+Dense embedded      0.69    0.86    0.88      0.87  0.78
+Dense server        0.69    0.86    0.88      0.87  0.78
+Hybrid embedded     0.74    0.88    0.88      0.88  0.81
+Hybrid server       0.74    0.88    0.88      0.88  0.81
+```
+
+Identical. Embedded dense vs. server dense: top-1 agreement 50/50, mean
+top-5 Jaccard overlap 1.00. Embedded hybrid vs. server hybrid: also 50/50,
+also 1.00 — a cleaner result than Phase 1D's embedded-vs-local-NumPy
+comparison (which had a 0.99 hybrid overlap from float16/renormalization
+differences between NumPy and Qdrant's own cosine computation). Here both
+sides run the same Qdrant cosine implementation, just over different
+transports, so that source of divergence doesn't apply.
+
+### Search behavior — not an HNSW test
+
+This corpus is far too small to say anything about approximate search.
+Qdrant's own collection status after indexing confirms why:
+`full_scan_threshold: 10000` (server default, not overridden) and
+`indexed_vectors_count: 0` for all 40 points — the server itself is doing
+full-scan search here, not HNSW, regardless of embedded vs. server mode.
+`hnsw_ef`, `ef_construct`, `m`, and `full_scan_threshold` were left at
+their defaults; none were tuned to force or avoid HNSW. Whether parity
+holds under real approximate search is untested and would need a corpus
+large enough to cross that threshold — a different, later experiment, not
+this one.
+
+### Performance
+
+CPU-only, single Docker container on the same machine — descriptive, not a
+network or production-latency claim: embedded collection open 0.04s;
+server connect + readiness check 0.03s; query retrieval for 50 queries,
+embedded 8.39s vs. server 9.74s. Server mode was slightly slower, as
+expected — HTTP adds overhead that an in-process embedded client doesn't
+have. On 40 points this is not a meaningful benchmark either way; the
+point of server mode is operational architecture (a separate, restartable,
+independently-upgradable service), not raw speed.
+
+### Limitations specific to Phase 1E
+
+- Tested against one local Docker container on one machine, not a
+  multi-client or networked deployment.
+- No authentication, TLS, or resource limits were configured — this is a
+  development convenience, not a production security posture.
+- As above, this corpus cannot validate parity under HNSW/approximate
+  search; only exact full-scan parity was measured.
+
 ## Limitations
 
 - **LaTeX leakage.** Formulas are extracted from MediaWiki's `alttext`
@@ -512,12 +631,13 @@ only opens the existing collection and embeds 50 queries.
 
 ## Next steps
 
-Phase 1D confirms Qdrant-backed storage preserves both the aggregate
+Phase 1D confirmed Qdrant-backed storage preserves both the aggregate
 metrics and the query-by-query ranking of Phase 1C's hybrid retriever (the
-reason it's the retriever now persisted — see Phase 1C above for why it
-beat dense), while eliminating the ~200s corpus re-embedding cost on every
-process start. With dense storage no longer a confound, the next
-controlled experiment is Qdrant's native BM25 and native RRF (Query API
-fusion) against the current application-side BM25 + RRF, rather than
-adding a KB-sufficiency threshold, reranking, or a second embedding model
-before that comparison exists.
+reason it's the retriever persisted — see Phase 1C above for why it beat
+dense). Phase 1E confirmed that parity holds moving from embedded storage
+to a real server, with perfect ranking agreement, and that the deployment
+mode is no longer a confound either. With both storage and deployment
+mode settled, the next controlled experiment is Qdrant's native BM25 and
+native RRF (Query API fusion) against the current application-side BM25 +
+RRF, rather than adding a KB-sufficiency threshold, reranking, or a second
+embedding model before that comparison exists.

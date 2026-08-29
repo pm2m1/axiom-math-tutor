@@ -114,8 +114,18 @@ Nothing is required to run the current skeleton.
 cd apps/api
 uv run python -m axiom.knowledge.ingest    # fetch + chunk the algebra corpus
 uv run python -m axiom.retrieval.evaluate --retriever compare  # BM25 vs. dense vs. hybrid
-uv run python -m axiom.retrieval.index_qdrant   # one-time: embed corpus into Qdrant
-uv run python -m axiom.retrieval.evaluate --retriever parity   # local vs. Qdrant-backed
+uv run python -m axiom.retrieval.index_qdrant   # one-time: embed corpus into Qdrant (embedded storage)
+uv run python -m axiom.retrieval.evaluate --retriever parity   # local vs. embedded Qdrant
+```
+
+Qdrant defaults to embedded local storage; a real server is optional, via
+Docker Compose:
+
+```bash
+docker compose up -d   # starts Qdrant on http://localhost:6333
+cd apps/api
+AXIOM_QDRANT_URL=http://localhost:6333 uv run python -m axiom.retrieval.index_qdrant
+AXIOM_QDRANT_URL=http://localhost:6333 uv run python -m axiom.retrieval.evaluate --retriever server-parity
 ```
 
 The chunked corpus and evaluation set are already committed under `data/`,

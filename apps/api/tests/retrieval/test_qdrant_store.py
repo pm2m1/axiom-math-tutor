@@ -10,6 +10,10 @@ from axiom.retrieval.base import Retriever
 from axiom.retrieval.qdrant_store import (
     QdrantDenseRetriever,
     chunk_to_payload,
+    create_client,
+    create_local_client,
+    create_server_client,
+    default_storage_path,
     ensure_collection,
     index_chunks,
     payload_to_chunk,
@@ -139,3 +143,55 @@ def test_qdrant_dense_retriever_satisfies_retriever_protocol(client: QdrantClien
 def test_qdrant_dense_retriever_requires_existing_collection(client: QdrantClient) -> None:
     with pytest.raises(ValueError):
         QdrantDenseRetriever(client, FakeEmbedder())
+
+
+def test_default_storage_path_respects_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AXIOM_QDRANT_PATH", "/tmp/somewhere")
+    assert default_storage_path() == Path("/tmp/somewhere")
+
+
+def test_default_storage_path_falls_back_to_repo_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AXIOM_QDRANT_PATH", raising=False)
+    assert default_storage_path().parts[-2:] == (".data", "qdrant")
+
+
+def test_create_client_uses_local_mode_when_url_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("AXIOM_QDRANT_URL", raising=False)
+    monkeypatch.setenv("AXIOM_QDRANT_PATH", str(tmp_path / "qdrant"))
+
+    client = create_client()
+    try:
+        assert client.collection_exists("axiom_algebra") is False
+    finally:
+        client.close()
+
+
+def test_create_client_fails_clearly_when_server_url_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AXIOM_QDRANT_URL", "http://localhost:1")
+
+    with pytest.raises(ConnectionError, match="not reachable"):
+        create_client()
+
+
+def test_create_server_client_does_not_fall_back_to_local_mode(tmp_path: Path) -> None:
+    """A misconfigured/unreachable server must raise, not silently return a
+    working local client — that would make a "server" run misleading."""
+    with pytest.raises(ConnectionError):
+        create_server_client("http://localhost:1")
+
+
+def test_create_local_client_ignores_server_url_env_var(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("AXIOM_QDRANT_URL", "http://localhost:1")
+    monkeypatch.setenv("AXIOM_QDRANT_PATH", str(tmp_path / "qdrant"))
+
+    client = create_local_client()
+    try:
+        assert client.collection_exists("axiom_algebra") is False
+    finally:
+        client.close()

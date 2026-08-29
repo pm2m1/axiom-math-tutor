@@ -74,16 +74,28 @@ The minimum scope required by the originating assignment.
       corpus: indexing twice produces 40 points, not 80; a fresh process
       queries the collection in seconds instead of re-embedding for ~200s
 
+**Phase 1E — Qdrant server parity (done):**
+
+- [x] Docker Compose Qdrant server (`compose.yaml`, pinned image, named
+      volume), selected via `AXIOM_QDRANT_URL`; embedded local mode remains
+      the default and is unaffected — see `docs/retrieval-evaluation.md`
+- [x] Parity confirmed against a real running server: identical
+      Hit@k/Recall@5/MRR, 50/50 top-1 agreement and 1.00 top-5 overlap for
+      both dense and hybrid
+- [x] Persistence demonstrated across a container restart, not just a
+      process restart; not an HNSW/ANN test — this corpus is too small to
+      cross Qdrant's full-scan threshold in either deployment mode
+
 **Still open for Phase 1:**
 
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
       prompts, basic prompt-injection resistance)
 - [ ] Qdrant native BM25 / native RRF (Query API fusion) — a separate,
       controlled comparison against the current application-side BM25 + RRF
-      now that dense storage is Qdrant-backed
+      now that both storage and deployment mode are Qdrant-backed
 - [ ] KB-first retrieval policy with an empirically justified confidence
-      threshold (not chosen arbitrarily — none of Phase 1A's, 1B's, 1C's,
-      or 1D's confidence investigations found one yet)
+      threshold (not chosen arbitrarily — none of Phase 1A's through 1D's
+      confidence investigations found one yet)
 - [ ] Web search / MCP fallback triggered only below that threshold
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response
       together with explicit typed state

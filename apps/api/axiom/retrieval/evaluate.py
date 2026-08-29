@@ -7,13 +7,17 @@
     uv run python -m axiom.retrieval.evaluate --retriever qdrant-hybrid
     uv run python -m axiom.retrieval.evaluate --retriever compare
     uv run python -m axiom.retrieval.evaluate --retriever parity
+    uv run python -m axiom.retrieval.evaluate --retriever server-parity
 
 Loads the committed corpus and labeled query set and runs it through one or
-more retrievers. `qdrant-dense`/`qdrant-hybrid` need a collection already
-built by `index_qdrant.py`. `compare` re-runs bm25/dense/hybrid (Phase
-1B/1C); `parity` additionally re-runs the Qdrant-backed retrievers and
-checks they rank the same way as their local counterparts (Phase 1D). No
-numbers here are hardcoded from earlier phases. See
+more retrievers. `qdrant-dense`/`qdrant-hybrid` and `qdrant-dense`'s
+underlying client target embedded local storage by default, or a Qdrant
+server if `AXIOM_QDRANT_URL` is set — see compose.yaml. `compare` re-runs
+bm25/dense/hybrid (Phase 1B/1C); `parity` additionally re-runs Qdrant
+(always embedded) and checks it ranks the same way as its local NumPy
+counterpart (Phase 1D); `server-parity` compares embedded Qdrant against a
+real Qdrant server, both dense and hybrid, and requires `AXIOM_QDRANT_URL`
+(Phase 1E). No numbers here are hardcoded from earlier phases. See
 docs/retrieval-evaluation.md for what these numbers mean and their
 limitations — in particular the out-of-scope sample is only 8 queries, too
 few to support a confident KB-sufficiency threshold.
@@ -21,6 +25,7 @@ few to support a confident KB-sufficiency threshold.
 
 import argparse
 import io
+import os
 import statistics
 import sys
 import time
@@ -28,7 +33,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel
-from qdrant_client import QdrantClient
 
 from axiom.knowledge.models import KnowledgeChunk
 from axiom.retrieval.base import Retriever
@@ -36,7 +40,12 @@ from axiom.retrieval.bm25 import BM25Retriever
 from axiom.retrieval.dense import DenseRetriever, SentenceTransformerEmbedder
 from axiom.retrieval.hybrid import CANDIDATE_DEPTH, RRF_K, HybridRetriever
 from axiom.retrieval.metrics import hit_at_k, recall_at_k, reciprocal_rank
-from axiom.retrieval.qdrant_store import QdrantDenseRetriever, default_storage_path
+from axiom.retrieval.qdrant_store import (
+    QdrantDenseRetriever,
+    create_client,
+    create_local_client,
+    create_server_client,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 CORPUS_PATH = _REPO_ROOT / "data" / "corpus" / "algebra_chunks.jsonl"
@@ -536,6 +545,84 @@ def _print_parity(
     )
 
 
+@dataclass
+class ServerParityTiming:
+    embedded_open_seconds: float
+    server_connect_seconds: float
+    embedded_query_seconds: float
+    server_query_seconds: float
+
+
+def _print_server_parity(
+    bm25_results: list[QueryResult],
+    embedded_dense_results: list[QueryResult],
+    server_dense_results: list[QueryResult],
+    embedded_hybrid_results: list[QueryResult],
+    server_hybrid_results: list[QueryResult],
+    timing: ServerParityTiming,
+) -> None:
+    """Embedded local-mode Qdrant vs. a real Qdrant server — Phase 1E. Not
+    an HNSW/ANN benchmark: this 40-point corpus is far too small for that,
+    and both deployments use Qdrant's normal defaults (no forced
+    full_scan_threshold or HNSW parameters). See docs/retrieval-evaluation.md."""
+    print("Qdrant server parity comparison")
+    print("--------------------------------")
+    print(f"{'Retriever':<16}{'Hit@1':>8}{'Hit@3':>8}{'Hit@5':>8}{'Recall@5':>10}{'MRR':>8}")
+    for label, results in [
+        ("BM25", bm25_results),
+        ("Dense embedded", embedded_dense_results),
+        ("Dense server", server_dense_results),
+        ("Hybrid embedded", embedded_hybrid_results),
+        ("Hybrid server", server_hybrid_results),
+    ]:
+        m = compute_metrics(results)
+        print(
+            f"{label:<16}{m.hit_at_1:>8.2f}{m.hit_at_3:>8.2f}{m.hit_at_5:>8.2f}"
+            f"{m.recall_at_5:>10.2f}{m.mrr:>8.2f}"
+        )
+
+    n = len(embedded_dense_results)
+
+    print()
+    top1, overlap, differing = ranking_agreement(embedded_dense_results, server_dense_results)
+    print(f"Embedded dense vs. server dense — top-1 agreement: {top1}/{n}")
+    print(f"  mean top-5 overlap (Jaccard): {overlap:.2f}")
+    if differing:
+        print("  top-1 differs:")
+        for embedded_r, server_r in differing:
+            print(
+                f"    {embedded_r.case.id}: embedded={embedded_r.ranked_ids[:1]} "
+                f"server={server_r.ranked_ids[:1]}"
+            )
+
+    print()
+    top1, overlap, differing = ranking_agreement(embedded_hybrid_results, server_hybrid_results)
+    print(f"Embedded hybrid vs. server hybrid — top-1 agreement: {top1}/{n}")
+    print(f"  mean top-5 overlap (Jaccard): {overlap:.2f}")
+    if differing:
+        print("  top-1 differs:")
+        for embedded_r, server_r in differing:
+            print(
+                f"    {embedded_r.case.id}: embedded={embedded_r.ranked_ids[:1]} "
+                f"server={server_r.ranked_ids[:1]}"
+            )
+
+    print()
+    print(f"Embedded collection open time: {timing.embedded_open_seconds:.2f}s")
+    print(f"Server connect + readiness check: {timing.server_connect_seconds:.2f}s")
+    print(
+        f"Query retrieval time, {n} queries — "
+        f"embedded: {timing.embedded_query_seconds:.2f}s total  "
+        f"server: {timing.server_query_seconds:.2f}s total"
+    )
+    print(
+        "These are single local-machine measurements against a local Docker "
+        "container, not a production or network-latency claim. Server mode "
+        "is not expected to be faster than embedded mode on 40 points — the "
+        "point of this phase is operational architecture, not speed."
+    )
+
+
 def main() -> None:
     # Some queries contain math symbols (e.g. ≥) that aren't representable
     # in Windows' default console/redirect codepage (cp1252); write UTF-8
@@ -555,6 +642,7 @@ def main() -> None:
             "qdrant-hybrid",
             "compare",
             "parity",
+            "server-parity",
         ],
         default="bm25",
     )
@@ -608,7 +696,7 @@ def main() -> None:
         corpus_embed_seconds = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        qdrant_client = QdrantClient(path=str(default_storage_path()))
+        qdrant_client = create_local_client()
         qdrant_open_seconds = time.perf_counter() - t0
         qdrant_dense = QdrantDenseRetriever(qdrant_client, embedder)
 
@@ -646,17 +734,70 @@ def main() -> None:
         )
         return
 
+    if args.retriever == "server-parity":
+        url = os.environ.get("AXIOM_QDRANT_URL")
+        if not url:
+            parser.error("--retriever server-parity requires AXIOM_QDRANT_URL to be set")
+
+        bm25 = BM25Retriever(chunks)
+        embedder = SentenceTransformerEmbedder()
+
+        t0 = time.perf_counter()
+        embedded_client = create_local_client()
+        embedded_open_seconds = time.perf_counter() - t0
+        embedded_dense = QdrantDenseRetriever(embedded_client, embedder)
+
+        t0 = time.perf_counter()
+        server_client = create_server_client(url)
+        server_connect_seconds = time.perf_counter() - t0
+        server_dense = QdrantDenseRetriever(server_client, embedder)
+
+        embedded_hybrid = HybridRetriever(bm25, embedded_dense)
+        server_hybrid = HybridRetriever(bm25, server_dense)
+
+        bm25_results = run_queries(bm25, cases)
+
+        t0 = time.perf_counter()
+        embedded_dense_results = run_queries(embedded_dense, cases)
+        embedded_query_seconds = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        server_dense_results = run_queries(server_dense, cases)
+        server_query_seconds = time.perf_counter() - t0
+
+        embedded_hybrid_results = run_queries(embedded_hybrid, cases)
+        server_hybrid_results = run_queries(server_hybrid, cases)
+
+        embedded_client.close()
+        server_client.close()
+
+        server_parity_timing = ServerParityTiming(
+            embedded_open_seconds,
+            server_connect_seconds,
+            embedded_query_seconds,
+            server_query_seconds,
+        )
+        _print_server_parity(
+            bm25_results,
+            embedded_dense_results,
+            server_dense_results,
+            embedded_hybrid_results,
+            server_hybrid_results,
+            server_parity_timing,
+        )
+        return
+
     retriever: Retriever
     if args.retriever == "bm25":
         retriever = BM25Retriever(chunks)
     elif args.retriever == "dense":
         retriever = DenseRetriever(chunks, SentenceTransformerEmbedder())
     elif args.retriever == "qdrant-dense":
-        qdrant_client = QdrantClient(path=str(default_storage_path()))
+        qdrant_client = create_client()
         retriever = QdrantDenseRetriever(qdrant_client, SentenceTransformerEmbedder())
     elif args.retriever == "qdrant-hybrid":
         bm25 = BM25Retriever(chunks)
-        qdrant_client = QdrantClient(path=str(default_storage_path()))
+        qdrant_client = create_client()
         qdrant_dense = QdrantDenseRetriever(qdrant_client, SentenceTransformerEmbedder())
         retriever = HybridRetriever(bm25, qdrant_dense)
     else:

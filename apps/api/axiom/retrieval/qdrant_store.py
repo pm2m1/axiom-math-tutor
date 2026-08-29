@@ -1,14 +1,16 @@
 """Persistent dense retrieval backed by Qdrant. See docs/retrieval-evaluation.md
-(Phase 1D) for why this was introduced: the Phase 1B DenseRetriever
+(Phase 1D/1E) for why this was introduced: the Phase 1B DenseRetriever
 re-embeds all 40 chunks on every process start (~200-300s on this
 CPU-only machine); Qdrant lets a corpus be embedded once and queried many
 times.
 
-Local persistent mode (`QdrantClient(path=...)`) is used instead of a
-server — this corpus is 40 chunks, and local mode gives real on-disk
-persistence without adding Docker as a project dependency. Only the dense
-storage/search changes: BM25 (bm25.py) and RRF (hybrid.py) are untouched,
-so QdrantDenseRetriever is a drop-in Retriever, not a new algorithm.
+`create_client()` supports two deployment modes without duplicating any
+retrieval code: embedded/local persistent storage (`QdrantClient(path=...)`,
+the default) and a real Qdrant server (`QdrantClient(url=...)`, selected by
+setting `AXIOM_QDRANT_URL` — see `compose.yaml`). Only the dense
+storage/search changes either way: BM25 (bm25.py) and RRF (hybrid.py) are
+untouched, so QdrantDenseRetriever is a drop-in Retriever, not a new
+algorithm.
 """
 
 import os
@@ -20,6 +22,7 @@ from typing import Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
+from qdrant_client.http.exceptions import ResponseHandlingException
 
 from axiom.knowledge.models import KnowledgeChunk
 from axiom.retrieval.dense import Embedder
@@ -46,6 +49,32 @@ def point_id_for_chunk(chunk_id: str) -> str:
 def default_storage_path() -> Path:
     override = os.environ.get("AXIOM_QDRANT_PATH")
     return Path(override) if override else _REPO_ROOT / ".data" / "qdrant"
+
+
+def create_local_client() -> QdrantClient:
+    storage_path = default_storage_path()
+    storage_path.mkdir(parents=True, exist_ok=True)
+    return QdrantClient(path=str(storage_path))
+
+
+def create_server_client(url: str) -> QdrantClient:
+    """Connectivity is verified immediately rather than left for the first
+    real query — a misconfigured or unreachable server should fail loudly
+    here, not silently behave like an empty collection later."""
+    client = QdrantClient(url=url)
+    try:
+        client.get_collections()
+    except ResponseHandlingException as exc:
+        raise ConnectionError(f"Qdrant server at {url!r} is not reachable: {exc}") from exc
+    return client
+
+
+def create_client() -> QdrantClient:
+    """Server mode if `AXIOM_QDRANT_URL` is set, otherwise embedded local
+    persistent storage. Server mode never falls back to local mode
+    silently on failure, which would make a "server" run misleading."""
+    url = os.environ.get("AXIOM_QDRANT_URL")
+    return create_server_client(url) if url else create_local_client()
 
 
 def chunk_to_payload(chunk: KnowledgeChunk) -> dict[str, Any]:
