@@ -3,6 +3,8 @@ import pytest
 from axiom.knowledge.models import KnowledgeChunk
 from axiom.retrieval.models import RetrievalResult
 from axiom.retrieval.sufficiency import (
+    SUFFICIENCY_V2_PATH,
+    SUFFICIENCY_V3_PATH,
     RetrievalEvidence,
     SufficiencyCase,
     confusion_matrix,
@@ -106,6 +108,48 @@ def test_support_chunk_ids_reference_real_corpus_chunks() -> None:
 def test_sufficiency_case_rejects_missing_field() -> None:
     with pytest.raises(ValueError):
         SufficiencyCase.model_validate_json('{"id": "x", "query": "q"}')
+
+
+# --- same invariants against the Phase 1H/1I fresh holdout files ---
+
+
+def _check_holdout_invariants(cases: list[SufficiencyCase]) -> None:
+    assert len({c.id for c in cases}) == len(cases)
+    assert len({c.query for c in cases}) == len(cases)
+    assert all(c.split == "holdout" for c in cases)
+    for case in cases:
+        if case.supported:
+            assert case.support_chunk_ids, case.id
+            assert case.negative_type is None, case.id
+        else:
+            assert case.support_chunk_ids == [], case.id
+            assert case.negative_type in ("near_domain", "easy_ood"), case.id
+
+
+def test_v2_holdout_satisfies_labeling_invariants() -> None:
+    _check_holdout_invariants(load_sufficiency_cases(SUFFICIENCY_V2_PATH))
+
+
+def test_v3_holdout_satisfies_labeling_invariants() -> None:
+    _check_holdout_invariants(load_sufficiency_cases(SUFFICIENCY_V3_PATH))
+
+
+def test_v2_and_v3_holdout_chunk_ids_are_real() -> None:
+    from axiom.retrieval.evaluate import load_chunks
+
+    chunk_ids = {c.chunk_id for c in load_chunks()}
+    for path in (SUFFICIENCY_V2_PATH, SUFFICIENCY_V3_PATH):
+        for case in load_sufficiency_cases(path):
+            for cid in case.support_chunk_ids:
+                assert cid in chunk_ids, f"{case.id} references unknown chunk {cid}"
+
+
+def test_v3_holdout_has_no_exact_query_overlap_with_earlier_datasets() -> None:
+    earlier = {c.query for c in load_sufficiency_cases()} | {
+        c.query for c in load_sufficiency_cases(SUFFICIENCY_V2_PATH)
+    }
+    v3_queries = {c.query for c in load_sufficiency_cases(SUFFICIENCY_V3_PATH)}
+    assert earlier & v3_queries == set()
 
 
 class FakeRetriever:

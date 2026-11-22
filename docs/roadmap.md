@@ -135,6 +135,42 @@ The minimum scope required by the originating assignment.
       closeness that fools retrieval on the "mentions but doesn't explain"
       failure class, and does not correct it
 
+**Phase 1I — LLM evidence-sufficiency judge (done):**
+
+- [x] LLM evidence-sufficiency judge implemented, frozen prompt
+      `evidence-sufficiency-v1`, `EvidenceJudgment` schema, evidence-only
+      policy against the same top-5 hybrid evidence — an earlier OpenAI
+      implementation was prepared but never evaluated (API-key
+      availability); Gemini (`gemini-3.6-flash`) was smoke-tested
+      successfully but its free tier (5 RPM / 20 RPD, confirmed via AI
+      Studio) could not complete a 58-call run; Meta's Model API
+      (`muse-spark-1.3`, via the official `openai` SDK pointed at a
+      different `base_url`) was added as a second provider — see
+      `docs/kb-sufficiency.md` for the full disclosure
+- [x] Fresh 58-query holdout (`algebra_sufficiency_v3.jsonl`), hand-
+      verified the same way as Phase 1G/1H, created before every
+      provider change and unmodified by any of them
+- [x] Resumable, paced, provider-separated evaluation execution
+      (`judge_execution.py`): requests paced ≥16s apart, every
+      successfully-validated judgment cached locally (git-ignored),
+      keyed by provider/model/prompt/thinking/evidence/schema so a
+      change silently invalidates stale entries — judge semantics
+      unchanged throughout
+- [x] Execution order changed to evaluate fresh v3 first
+      (`--evaluator llm-judge-v3`), deferring the 167 development/
+      historical LLM calls — decided before any v3 result existed from
+      either provider; the retrieval-only comparison baseline is fit on
+      development entirely locally (no LLM calls)
+- [x] Real result: all 58 v3 cases judged successfully by Meta
+      `muse-spark-1.3` (0 errors). Accuracy 0.98, precision 1.00, recall
+      0.96, F1 0.98, false-accept rate 0.00, false-reject rate 0.04
+      (1/58, a conservative misclassification, not an accept) — a
+      substantial improvement over the frozen retrieval-only baseline on
+      the same 58 cases (accuracy 0.84, FAR 0.16, FRR 0.15) and over
+      Phase 1H's cross-encoder. All 7 "related but insufficient" cases
+      (the core failure class this phase targeted) were correctly
+      rejected. See `docs/kb-sufficiency.md` for the full breakdown.
+
 **Still open for Phase 1:**
 
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
@@ -142,11 +178,14 @@ The minimum scope required by the originating assignment.
 - [ ] Diagnosing why Qdrant BM25 regresses the hybrid despite comparable
       standalone lexical metrics, before trying a different BM25
       configuration or reranking
-- [ ] An LLM evidence judge against the Phase 1G/1H sufficiency benchmarks,
-      given Phase 1H's cross-encoder evaluation did not materially reduce
-      false accepts at usable recall
+- [ ] Deciding whether to wire the Meta judge into live KB-vs-fallback
+      routing, given Phase 1I's result — not done automatically; a
+      deliberate next-phase decision
+- [ ] Optionally running the historical v1/v2 sets against the LLM judge
+      for additional context — deferred in Phase 1I to conserve quota,
+      not required for the v3 decision
 - [ ] Web search / MCP fallback, gated by whatever sufficiency decision
-      Phase 1G/1H or their successor validates
+      Phase 1G/1H/1I or their successor validates
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response
       together with explicit typed state
 - [ ] Human-in-the-loop feedback capture (thumbs up/down or equivalent,

@@ -406,6 +406,374 @@ pass itself.
   (changing retrieval order, not just scoring fixed evidence) would help
   — that's a different, still-untested change.
 
+## Phase 1I — LLM evidence-sufficiency judge
+
+Phase 1H's conclusion was that a relevance cross-encoder doesn't fix the
+"mentions but doesn't explain" failure — it ranks topical closeness, the
+same signal retrieval already uses, not whether the evidence actually
+answers the question. Phase 1I asks whether a small LLM, instructed to
+read the evidence and judge sufficiency rather than relevance, does
+better. This is evaluation only: no answer generation, no web search, no
+live routing.
+
+### Provider: OpenAI prepared, never evaluated, replaced with Gemini
+
+The judge was first implemented against OpenAI's Responses API
+(`gpt-5.4-nano-2026-03-17`). That implementation was never committed and
+never produced a result — no `OPENAI_API_KEY` was available, so the CLI
+stopped at the key check every time it was run, before any development,
+historical, or v3 judgment existed.
+
+The provider was then switched to Google's Gemini Developer API, for one
+reason only: API-key availability/cost (a Gemini free-tier key was
+available; the OpenAI integration required paid access that wasn't
+authorized). This was **not** a response to any v3 performance signal —
+none existed to respond to. The fresh v3 holdout (below) had already been
+created before this switch, and its queries and labels were not modified
+because of it. The OpenAI code path was deleted rather than kept
+alongside Gemini, since it was unfinished and unevaluated, not a working
+baseline worth preserving.
+
+The first Gemini model tried, `gemini-2.5-flash`, failed its mandatory
+pre-v3 smoke test: the real API returned `404 NOT_FOUND`, "no longer
+available to new users," and named `gemini-3.6-flash` as the suggested
+replacement. No v3 (or development, or historical) result existed for
+`gemini-2.5-flash` — the smoke test uses a synthetic example, not a
+benchmark query. That replacement was then explicitly authorized and used
+for the one real evaluation reported below; `gemini-2.5-flash` was never
+evaluated on anything.
+
+### Model and settings (frozen)
+
+- Model: `gemini-3.6-flash` (Google Gemini Developer API, free tier).
+  Gemini does not expose an OpenAI-style pinned dated snapshot for this
+  model; the smoke test's returned `model_version` was `gemini-3.6-flash`
+  (recorded as returned, not invented). Not chosen for capability — same
+  rationale as the original pick: a small, cost-appropriate model for a
+  classification-shaped task, not a claim that it's the best possible
+  judge.
+- Thinking level: `low` (Gemini 3.6 uses named thinking levels, not the
+  2.5-era token budget), fixed, not tuned against any result. No thought
+  summaries requested or stored — only the final structured judgment.
+- API surface: `google-genai`'s `client.models.generate_content()`,
+  Structured Outputs (`response_mime_type="application/json"`,
+  `response_schema=EvidenceJudgment`), no tools enabled — no web search,
+  file search, code execution, or MCP. The judge sees only the evidence
+  it's given.
+- Prompt identifier: `evidence-sufficiency-v1` — the prompt's actual
+  instructions are unchanged since the original OpenAI version (same
+  policy, just delivered as `system_instruction`), so the same identifier
+  is accurate. One frozen zero-shot prompt
+  (`axiom/retrieval/evidence_judge.py`), no few-shot examples from known
+  failures, no per-result editing.
+- Evidence: the same selected hybrid retriever's top-5 chunks, unchanged
+  rank order, same depth as Phase 1G/1H — no reranking.
+- Retries: 429 (RESOURCE_EXHAUSTED — free-tier quota) and 5xx are retried
+  up to twice with backoff; a 429 that persists past retries stops the
+  whole evaluation run rather than continuing to the next dataset (free
+  tier quotas are project-specific and not assumed from documentation).
+
+### Judge task and output schema
+
+The prompt is explicit that the question is "does the supplied evidence
+contain enough information," not "do you know the answer" — it instructs
+the model to ignore outside knowledge, treat a topically-related passage
+as not necessarily sufficient, treat a passage that only names a concept
+as insufficient, and choose insufficient when uncertain. Evidence text is
+marked as untrusted content; instructions appearing inside it are data,
+not commands.
+
+Structured output (`EvidenceJudgment`): `verdict` (sufficient/
+insufficient), `coverage` (full/partial/none), `supporting_chunk_ids`,
+`reason_code` (`complete_support` / `partial_support` /
+`related_but_insufficient` / `no_relevant_evidence`), and a short `reason`
+string — no hidden chain-of-thought is requested or stored. Two checks
+run on every response before it's trusted: `verdict=sufficient` must pair
+with `coverage=full` (anything else is rejected as contradictory), and
+every `supporting_chunk_ids` entry must be one of the chunk IDs actually
+supplied — an invented citation is treated as an evaluation error, not
+silently accepted. The decision is the direct verdict
+(`sufficient`→USE_KB, `insufficient`→ABSTAIN); there is no confidence
+threshold in this first baseline.
+
+### Fresh holdout: `algebra_sufficiency_v3.jsonl`
+
+58 queries, `split: "holdout"`, created only after the judge's original
+design (evidence-only policy, structured schema, evidence depth, decision
+semantics) was frozen, and before either provider switch described above.
+Neither the OpenAI attempt nor the `gemini-2.5-flash` smoke-test failure
+produced any v3 judgment; v3 remained unevaluated by any LLM until the
+one real `gemini-3.6-flash` run reported below.
+
+| | count |
+|---|---:|
+| supported | 26 |
+| near-domain unsupported | 22 |
+| easy-OOD unsupported | 10 |
+
+Sampled by category, not around Phase 1G/1H's two known failures: new
+supported queries spread across previously under-used corpus chunks
+(e.g. the shepherd-metaphor multiplication/division passage, the
+non-worked completing-the-square example, radical-manipulation
+identities); near-domain queries cover both previously-documented gaps
+and newly-verified ones (closure property, vertex form, piecewise
+functions, quadratic inequalities, rational expressions/functions,
+logarithms, the fundamental theorem of algebra); easy-OOD spans calculus,
+geometry, chemistry, biology, computer science, physics, finance, and
+unrelated topics. One deliberate case: a supported query about the
+corpus's Fahrenheit/Celsius word-problem chunk, contrasted with an
+easy-OOD query about a real-world temperature fact — testing whether the
+same accidental content Phase 1H found surprising is handled correctly
+when asked on-topic versus off-topic. Every label was checked against the
+actual chunk text (not generated and trusted), including confirming
+several candidate near-domain terms are genuinely absent from the corpus
+by direct search. Leakage checks: 58 unique IDs and query strings, zero
+exact-string overlap with the existing 167 (107 + 60) queries; a
+word-overlap near-duplicate scan against both prior datasets found three
+genuine near-paraphrases (a restated "transitive property of
+inequalities" question, a restated Fahrenheit/Celsius question, and a
+restated matrix question), each replaced with a distinct angle or a
+different verified gap before finalizing.
+
+### Real evaluation: blocked on free-tier quota
+
+`gemini-2.5-flash` failed its mandatory pre-v3 smoke test (`404
+NOT_FOUND` — "no longer available to new users", suggesting
+`gemini-3.6-flash`). No v3 judgment existed at that point. Per the
+governing instructions, `gemini-3.6-flash` was then explicitly authorized
+as the sole replacement (no other model was tried), the model/thinking
+configuration was updated, and a fresh smoke test — still a synthetic,
+non-v3 example — was run before touching v3. It succeeded:
+
+```text
+model_version: gemini-3.6-flash
+verdict: sufficient   coverage: full   reason_code: complete_support
+usage: prompt_tokens=186 candidates_tokens=66 thoughts_tokens=0 total_tokens=252
+```
+
+With the design frozen on `gemini-3.6-flash`, the real evaluation
+(`--evaluator llm-judge`) was run once, in dataset order: development,
+historical v1 test, historical v2 holdout, fresh v3 holdout. It stopped
+partway through the **first** dataset:
+
+```text
+Gemini free-tier quota exhausted (429) during 'development', after retries.
+Completed 11/71 judgments in 'development'.
+Stopping without committing an incomplete Phase 1I result.
+```
+
+11 of 71 development judgments completed before this project's free-tier
+quota was exhausted; the remaining 60 development cases and all of
+historical v1 (36), historical v2 (60), and — critically — the fresh v3
+holdout (58) were never sent. **No v3 result exists.** Per the governing
+instructions ("do not switch models or enable billing... if the free
+quota cannot complete the benchmark: STOP and do NOT commit an incomplete
+Phase 1I experiment"), no further requests were made, no model swap was
+attempted, and v3 was not touched. The 11 completed judgments are not
+reported as a metric — 11 development cases is not a meaningful sample
+and treating a partial run as a result would be exactly the kind of
+fabrication this phase's instructions rule out.
+
+A second attempt (some time later, in the same session) reached only
+10/71 development cases before hitting the same condition — confirming
+this was not a brief rate-limit spike but a durable quota. AI Studio's
+rate-limit page later confirmed this project's actual Gemini 3.6 Flash
+free-tier limits: **5 requests/minute, 250K tokens/minute, 20
+requests/day** — project-specific figures, not a universal Gemini limit.
+A ~225-call four-dataset benchmark cannot complete in one day under a 20
+RPD cap, so evaluation execution was made resumable:
+
+- **Pacing** (`axiom/retrieval/judge_execution.py`, `RequestPacer`): real
+  request starts are spaced at least 16 seconds apart (≈3.75/minute),
+  comfortably under the 5 RPM limit, without changing what each request
+  contains or how it's judged.
+- **Cache** (`JudgeCache`, `.data/evaluation-cache/`, git-ignored): every
+  successfully-validated judgment is persisted keyed by a hash of
+  provider, model, prompt version, thinking level, the query, the
+  evidence chunk IDs and their actual text, and the output schema's own
+  fingerprint. Any change to model, prompt, thinking level, retrieval, or
+  schema silently invalidates old entries — a stale judgment is never
+  reused. Failures, invalid responses, and quota-limited attempts are
+  never cached. On startup, the evaluator skips any case whose exact
+  identity is already cached and only pays the pacing cost for the rest,
+  so the benchmark can resume across multiple days without resending
+  already-successful requests.
+- No successful judgments from the two earlier (pre-cache) attempts could
+  be recovered — the cache didn't exist yet when those 11 and 10 calls
+  were made, so those responses were never persisted. The cache starts
+  empty; the next run pays for all ~225 calls once, and any run
+  interrupted after that resumes from whatever was cached.
+
+`axiom/retrieval/evidence_judge.py` (the judge itself — model, prompt,
+schema, decision semantics) is unchanged and unit-tested against a fake
+client; only execution reliability was added. Re-running
+`uv run python -m axiom.retrieval.evaluate_sufficiency --evaluator
+llm-judge` once quota resets requires no code change, and will resume
+rather than restart.
+
+### Execution-order change: v3 first, historical deferred
+
+The original plan (Phase 1H's precedent) was to evaluate development and
+both historical sets before the fresh holdout. After observing this
+project's 20-requests/day free-tier constraint — but before any v3
+judgment existed — that order was changed: `--evaluator llm-judge-v3`
+evaluates only the fresh v3 holdout against the frozen Gemini judge,
+skipping the 71+36+60=167 development/historical Gemini calls entirely.
+
+The reasoning: this judge is a frozen zero-shot evaluator with no
+training and no threshold fitting (unlike the retrieval-only logistic
+baseline, which *is* fit on development, but that fitting is entirely
+local — no Gemini calls). Nothing about running development or the
+historical sets through Gemini would change the judge's configuration,
+so they aren't required to determine it. Running all 167 of them first
+would cost roughly 9 additional free-tier quota days without improving
+the validity of v3 — the one generalization estimate this phase cares
+about. Development/historical Gemini evaluation is deferred, not
+skipped permanently: `--evaluator llm-judge` (the original, full
+four-dataset path) remains available and may be run later if its
+comparison value justifies the quota, but is not required for the Phase
+1I decision.
+
+This is an execution-order change, not a benchmark optimization: it was
+made with zero v3 judgments in hand, v3's queries and labels were not
+touched, and the retrieval-only baseline used for comparison is the same
+frozen Phase 1G model regardless of which order the LLM judge runs in.
+
+A further attempt at `--evaluator llm-judge-v3 --provider gemini`, after
+the user-reported quota reset, reached only 1/58 before hitting the same
+429 condition again almost immediately — confirming this was the daily
+quota, not a one-off rate-limit blip that a brief wait would clear. One
+valid Gemini v3 judgment exists in the cache; it is kept, but — being a
+single case — is not reported as a metric.
+
+### Provider switch: Gemini exhausted, Meta authorized
+
+Before any aggregate v3 result existed for any provider, Gemini's
+free-tier was replaced with a second provider — Google's Gemini
+Developer API was not abandoned by choice; the actual free quota made a
+58-call run impractical to complete in reasonable time. Meta's Model API
+(`muse-spark-1.3`, reached through the official `openai` Python SDK
+pointed at `https://api.meta.ai/v1` — Meta's documented integration
+method, not a new abstraction) was explicitly authorized as a second,
+separate provider:
+
+- Same frozen design throughout: prompt `evidence-sufficiency-v1`
+  (identical instructions, byte-for-byte), `EvidenceJudgment` schema and
+  validation, top-5 hybrid evidence, decision semantics
+  (`sufficient`→USE_KB). Only the provider-specific settings differ:
+  model `muse-spark-1.3`, reasoning `effort=low` (Meta's equivalent of
+  Gemini's `thinking_level=low`).
+- `MetaEvidenceJudge` (`axiom/retrieval/evidence_judge.py`) refuses to
+  send the API key unless `MODEL_API_BASE_URL` matches
+  `https://api.meta.ai/v1` exactly (`MetaCredentialError` otherwise). A
+  429 (rate limit) is retried with backoff; a 402 (billing/insufficient
+  credit) is not retryable and is treated as a stop-the-run condition,
+  same as a persistent quota exhaustion.
+- `judge_execution.py::cache_key()` was extended with an explicit
+  `provider` field (previously hardcoded to `"gemini"`); Gemini's one
+  existing cache entry was verified to still resolve correctly under the
+  new signature before any Meta call was made.
+- A mandatory pre-v3 smoke test (synthetic, non-v3 example) was run
+  first and succeeded: `model_version=muse-spark-1.3`,
+  `verdict=sufficient coverage=full`, usage
+  `prompt_tokens=341 candidates_tokens=392 thoughts_tokens=329
+  total_tokens=733`, latency 5.14s. Per instruction, the run then paused
+  for manual confirmation of Meta billing/credit coverage before any v3
+  case was sent — no v3 judgment existed until that confirmation.
+
+### Real v3 result: Meta `muse-spark-1.3`, 58/58
+
+Run once, paced (≥16s between request starts), after the freeze above —
+no model, prompt, schema, thinking setting, retrieval, or v3 question/
+label was changed during or after the run.
+
+```text
+                        accuracy  precision  recall  F1    false_accept  false_reject
+Retrieval-only (1G)     0.84      0.81       0.85    0.83  0.16          0.15
+Meta muse-spark-1.3     0.98      1.00       0.96    0.98  0.00          0.04
+```
+
+Confusion matrices (n=58): retrieval-only `tp=22 fp=5 tn=27 fn=4`; Meta
+`tp=25 fp=0 tn=32 fn=1`. Hard negatives: retrieval-only near-domain 0.77,
+easy-OOD 1.00; Meta near-domain 1.00, easy-OOD 1.00. Zero evaluation
+errors (58/58 valid structured judgments, zero invalid/contradictory
+responses).
+
+Reason-code distribution, cross-tabulated with whether the verdict
+matched the true label:
+
+```text
+complete_support           25 correct, 0 wrong
+no_relevant_evidence       24 correct, 0 wrong
+related_but_insufficient    7 correct, 0 wrong
+partial_support             1 correct, 1 wrong
+```
+
+The `related_but_insufficient` row is the number this phase exists to
+measure: all 7 near-domain cases the judge placed in that category were
+correctly rejected — this is exactly the "topically related, but doesn't
+contain enough to answer" failure class Phase 1H's cross-encoder could
+not reliably separate from genuine sufficiency. Representative examples
+(all correctly judged insufficient):
+
+- *"What is the closure property of real numbers?"* — "mentions
+  properties of real numbers (Commutative, Associative, Distributive,
+  Identity) but does not state or define the closure property."
+- *"How do you factor a quadratic by grouping?"* — "describes completing
+  the square, the quadratic formula, and solving linear equations, but
+  none of the chunks describe the grouping method... topically related
+  to quadratics but lack the specific grouping steps."
+- *"What is the multiplicative identity property?"* — "no chunk defines
+  the multiplicative identity property... the closest text only names
+  the Identity Property in passing."
+
+**The one error** (the only misclassification across all 58 cases, a
+false reject): *"What does it mean for a quadratic's solutions to be
+'conjugate imaginary' rather than real?"* (`quadratics-formula-01`
+provides the discriminant condition for when solutions are "conjugate
+imaginary"). The judge's `partial_support` reasoning: "Evidence states
+the discriminant condition for conjugate imaginary (Δ<0) vs real (Δ>0),
+but does not define what 'conjugate imaginary' means or how it differs
+from real solutions." A defensible, conservative reading — the chunk
+does use the term without defining it — and it erred toward the safe
+direction (reject, not accept).
+
+Zero false accepts occurred — no near-domain or easy-OOD unsupported
+query was ever judged sufficient.
+
+**Usage**: 58 requests, 0 errors. `prompt_tokens=112953
+candidates_tokens=34960 thoughts_tokens=29641 total_tokens=147913`.
+Covered by this project's Meta Model API free credits (confirmed via the
+Meta Billing dashboard: "$142.94 Free credits in use", "₹0.00
+outstanding" before the run) — $0.00 out-of-pocket for this run; no
+per-token dollar rate is claimed or computed, since none was
+independently verified.
+
+**Latency**: mean 5.03s, median 4.55s, p95 8.73s, total wall-clock 292.0s
+for all 58 requests (descriptive, single run, not a production claim).
+
+### Limitations (Phase 1I)
+
+- 58 v3 cases (and 36/60 on the historical sets, never run against any
+  LLM judge) is a modest sample; a single-digit swing in false accepts or
+  rejects would change the headline rates visibly. One error in 58 cases
+  is not enough to characterize the judge's full failure distribution.
+- Two LLM providers were evaluated, but not by original design — Meta
+  was added only because Gemini's free tier made completing the
+  benchmark impractical, not as a deliberate comparison. No OpenAI result
+  exists; no comparison across three providers is implied or claimed.
+- `reason_code` is diagnostic only; it is never used for the routing
+  decision, which stays the explicit `verdict`.
+- Retry/backoff (bounded, `max_retries=2`) covers transient errors
+  (429/5xx for Gemini, 429 for Meta); it cannot help once a persistent
+  quota or billing condition is hit, by either provider.
+- The historical v1/v2 sets were never run against the LLM judge (either
+  provider) — deferred to conserve quota, not because they were judged
+  unnecessary; comparisons in this document are limited to v3.
+- Meta's exact per-token pricing was not independently verified; the
+  $0.00 figure reflects this run being covered by existing free credits,
+  not a verified permanently-free tier.
+
 ## Related work, briefly
 
 This two-step shape — retrieve, then assess whether the retrieved
@@ -417,10 +785,12 @@ LLM-based relevance judge) works well enough to be worth building on.
 
 ## Deferred
 
-Phase 1H evaluated a cross-encoder relevance judge (above); it did not
-materially help and is not wired into any live path. Still unimplemented:
-web search / MCP fallback, query rewriting, cross-encoder reranking, an
-LLM evidence judge, LangGraph orchestration, guardrails, human-in-the-loop
-feedback, SymPy verification, and adaptive tutoring. Both phases only
-produce and evaluate the routing decision in isolation — nothing here is
-wired into a live request path.
+Phase 1H evaluated a cross-encoder relevance judge; it did not materially
+help and is not wired into any live path. Phase 1I implements an LLM
+evidence judge but has not yet produced a real result (no API key
+authorized this session — see above). Still unimplemented: web search /
+MCP fallback, query rewriting, cross-encoder reranking, LangGraph
+orchestration, guardrails, human-in-the-loop feedback, SymPy verification,
+and adaptive tutoring. All three phases only produce and evaluate the
+routing decision in isolation — nothing here is wired into a live request
+path.

@@ -25,6 +25,9 @@ SUFFICIENCY_PATH = _REPO_ROOT / "data" / "evaluation" / "algebra_sufficiency.jso
 # Phase 1H fresh holdout — created only after the Phase 1H model/feature/
 # threshold design was frozen against the (already-inspected) set above.
 SUFFICIENCY_V2_PATH = _REPO_ROOT / "data" / "evaluation" / "algebra_sufficiency_v2.jsonl"
+# Phase 1I fresh holdout — created only after the LLM judge's model/prompt/
+# schema/settings were frozen against the (already-inspected) sets above.
+SUFFICIENCY_V3_PATH = _REPO_ROOT / "data" / "evaluation" / "algebra_sufficiency_v3.jsonl"
 
 
 class SufficiencyCase(BaseModel):
