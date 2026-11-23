@@ -41,10 +41,13 @@ base with measured BM25/dense/hybrid/Qdrant retrieval baselines, a Meta
 LLM evidence-sufficiency judge, a Tavily web-search fallback, a LangGraph
 workflow with an input guardrail and evidence-grounded answer generation,
 a React frontend that calls it for real, and persisted human feedback.
-Phase 2A adds a standalone, deterministic SymPy verification engine for
-single-variable linear/quadratic equations — no LLM involved, and not
-yet wired into Tutor mode's explanations or Check My Work. See the table
-below, `docs/roadmap.md`'s Phase 1 acceptance checklist, and
+Phase 2A/2B add a deterministic SymPy verification engine for
+single-variable linear/quadratic equations — no LLM involved — now
+surfaced to students two ways: checking a final candidate solution set
+(`/api/v1/verify`) and checking an ordered chain of reasoning steps,
+with first-error localization (`/api/v1/check-work`, Check My Work).
+Neither is wired into Tutor mode's LLM-generated explanations. See the
+table below, `docs/roadmap.md`'s Phase 1 acceptance checklist, and
 `docs/verification.md`.
 
 | Area | Status |
@@ -55,9 +58,10 @@ below, `docs/roadmap.md`'s Phase 1 acceptance checklist, and
 | LangGraph agentic workflow, evidence-grounded answer generation | Implemented |
 | React frontend wired to `/api/v1/answer`; Tutor mode only | Implemented |
 | Human feedback (thumbs up/down, optional correction, SQLite) | Implemented |
-| Deterministic SymPy verification (`/api/v1/verify`, linear/quadratic only) | Implemented (standalone) |
-| Check My Work, Practice modes | Planned (Phase 2B/3) |
-| Verification wired into Tutor/Check My Work, confidence/abstention | Planned |
+| Deterministic SymPy verification (`/api/v1/verify`, linear/quadratic only) | Implemented |
+| Check My Work: step-by-step verification, first-error localization | Implemented |
+| Practice mode | Planned (Phase 3) |
+| Verification wired into Tutor's LLM explanations, confidence/abstention | Planned |
 | Student model, misconception diagnosis, hint ladder | Planned |
 | JEEBench / MathTutorBench evaluation | Planned |
 | Lean-based formal verification | Research direction |
@@ -104,10 +108,11 @@ uv run uvicorn axiom.main:app --reload
 
 The API serves `GET /health` and `GET /api/v1/status` on
 `http://localhost:8000`, plus `POST /api/v1/question`, `POST /api/v1/answer`,
-`POST /api/v1/feedback`, and `POST /api/v1/verify` — see
-`docs/evidence-routing.md`, `docs/agentic-workflow.md`, `docs/feedback.md`,
-and `docs/verification.md`. `/api/v1/verify` needs no credentials and
-makes no network call — it's pure local SymPy computation.
+`POST /api/v1/feedback`, `POST /api/v1/verify`, and
+`POST /api/v1/check-work` — see `docs/evidence-routing.md`,
+`docs/agentic-workflow.md`, `docs/feedback.md`, and `docs/verification.md`.
+The two verification endpoints need no credentials and make no network
+call — they're pure local SymPy computation.
 
 ### Frontend
 
@@ -120,9 +125,9 @@ npm run dev
 The dev server runs on `http://localhost:5173` and expects the API at
 `http://localhost:8000` (override with `VITE_API_BASE_URL`). A small status
 indicator in the top bar shows whether it can reach the API. Tutor mode
-calls `/api/v1/answer` for real; Check My Work and Practice are shown
-disabled with a note explaining they need Phase 2/3 work that doesn't
-exist yet.
+calls `/api/v1/answer` for real; Check My Work calls `/api/v1/check-work`
+for real. Practice is shown disabled with a note explaining it needs
+Phase 3 work that doesn't exist yet.
 
 ### Environment variables
 
@@ -207,10 +212,11 @@ npm run test    # vitest, offline — mocks the API client, no real backend call
   knowledge base, vector retrieval, web-search fallback, LangGraph
   workflow, a real frontend integration, and persisted human-in-the-loop
   feedback — see `docs/roadmap.md` for the full acceptance checklist.
-- **Phase 2 — Verified mathematical reasoning**: problem routing, SymPy
-  verification, confidence/abstention, reasoning traces. *(Phase
-  2A — a standalone deterministic verification engine for
-  single-variable linear/quadratic equations — is done; see
+- **Phase 2 — Verified mathematical reasoning**: problem routing,
+  confidence/abstention, reasoning traces. *(Phase 2A/2B — a
+  deterministic SymPy verification engine for single-variable
+  linear/quadratic equations, surfaced via final-answer checking and a
+  real Check My Work step-by-step checker — are done; see
   `docs/verification.md`.)*
 - **Phase 3 — Adaptive tutoring**: student model, misconception diagnosis,
   hint ladder, targeted remediation, prerequisite graph.

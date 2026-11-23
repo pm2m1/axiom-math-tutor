@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
@@ -52,3 +52,82 @@ class VerifyResponse(BaseModel):
     detail: str
     complete: bool | None = None
     candidates: list[CandidateResponse] = []
+
+
+TransitionKind = Literal[
+    "equivalent",
+    "narrowing",
+    "broadening",
+    "partial_overlap",
+    "incompatible",
+    "unsupported",
+    "indeterminate",
+]
+StepCheckStatus = Literal[
+    "all_steps_equivalent",
+    "valid_but_incomplete",
+    "invalid_step_found",
+    "unsupported",
+    "verification_incomplete",
+]
+
+_BoundedEquation = Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class CheckWorkRequest(BaseModel):
+    """`solutions` distinguishes "no final answer submitted" (omitted,
+    the default `None` — `final_answer` in the response is then `None`
+    too) from "the student is claiming the equation has no real
+    solutions" (an explicit empty list `[]`), the same convention
+    `VerifyRequest` already uses."""
+
+    equation: str = Field(min_length=1, max_length=200)
+    variable: str = Field(default="x", min_length=1, max_length=1, pattern=r"^[A-Za-z]$")
+    steps: list[_BoundedEquation] = Field(default_factory=list, max_length=15)
+    solutions: list[str] | None = Field(default=None, max_length=20)
+
+
+class StepResult(BaseModel):
+    index: int
+    equation: str
+    category: Category
+    transition: TransitionKind
+    detail: str
+
+
+class CheckWorkResponse(BaseModel):
+    """`status` summarizes the whole chain:
+
+    - `"all_steps_equivalent"` — every step preserved the exact real
+      solution set of the original equation.
+    - `"valid_but_incomplete"` — no provably incorrect step was found,
+      but at least one step narrowed, broadened, or partially overlapped
+      the previous solution set instead of preserving it exactly.
+    - `"invalid_step_found"` — at least one step was provably
+      incompatible with the previous one; see `first_invalid_step_index`.
+    - `"unsupported"` — the *original* equation itself is outside the
+      supported grammar; no steps could be checked at all (`steps` is
+      empty).
+    - `"verification_incomplete"` — at least one individual step
+      couldn't be parsed, classified, or exactly solved, breaking
+      verification continuity at that point; later steps may still have
+      been checked against each other once a decidable step reappeared.
+
+    `chain_preserves_solution_set` is `True` only if every step was
+    exactly equivalent, `False` as soon as any step is confirmed
+    non-equivalent (regardless of unrelated gaps elsewhere), and `None`
+    when the only problems encountered were continuity gaps with no
+    confirmed non-equivalence either way. `final_answer`, when present,
+    is always computed against the *original* equation (step 0), never
+    against the student's last written step — it is a separate
+    dimension from step-reasoning correctness; see
+    `docs/verification.md`."""
+
+    status: StepCheckStatus
+    steps: list[StepResult]
+    first_invalid_step_index: int | None
+    first_non_equivalent_step_index: int | None
+    chain_preserves_solution_set: bool | None
+    deterministic: bool
+    detail: str
+    final_answer: VerifyResponse | None = None

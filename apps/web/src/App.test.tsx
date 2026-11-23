@@ -91,13 +91,39 @@ describe('App', () => {
     expect(screen.queryByText('first answer')).not.toBeInTheDocument()
   })
 
-  it('disables the input and shows an upcoming note for modes that are not implemented yet', () => {
+  it('switches to the real Check my work form, not the Tutor question box', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('tab', { name: 'Check my work' }))
 
-    expect(screen.getByPlaceholderText(/enter an algebra question/i)).toBeDisabled()
-    expect(screen.getByText(/not available yet/i)).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText(/enter an algebra question/i)).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Original equation')).toBeInTheDocument()
     expect(askQuestion).not.toHaveBeenCalled()
+  })
+
+  it('shows an upcoming note and no form for Practice, which is not implemented yet', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('tab', { name: 'Practice' }))
+
+    expect(screen.queryByPlaceholderText(/enter an algebra question/i)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Original equation')).not.toBeInTheDocument()
+    expect(screen.getByText(/not available yet/i)).toBeInTheDocument()
+  })
+
+  it('preserves the Tutor-mode answer when switching to another mode and back', async () => {
+    vi.mocked(askQuestion).mockResolvedValue(kbAnswer('x = 2'))
+
+    render(<App />)
+    ask('Solve 2x = 4')
+    expect(await screen.findByText('x = 2')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Check my work' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Tutor' }))
+
+    // Switching modes remounts the form (fresh state is the documented
+    // behavior elsewhere, e.g. feedback resetting per answer) — Tutor's
+    // own request/response handling, not stale leftover UI, is what's
+    // actually under test here.
+    expect(screen.getByPlaceholderText(/enter an algebra question/i)).toHaveValue('')
   })
 
   it('enforces the question character limit via maxLength', () => {

@@ -1,8 +1,17 @@
-import type { AnswerResponse, FeedbackRequest, FeedbackResponse } from './types'
+import type {
+  AnswerResponse,
+  CheckWorkRequest,
+  CheckWorkResponse,
+  FeedbackRequest,
+  FeedbackResponse,
+} from './types'
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
 export const QUESTION_MAX_LENGTH = 500
+export const EQUATION_MAX_LENGTH = 200
+export const MAX_STEPS = 15
+export const MAX_SOLUTIONS = 20
 
 /** Thrown for network failures and non-2xx responses — distinct from a
  * well-formed `AnswerResponse` with `status: "unavailable"`, which is
@@ -47,4 +56,11 @@ export function askQuestion(question: string, signal?: AbortSignal): Promise<Ans
 
 export function submitFeedback(request: FeedbackRequest): Promise<FeedbackResponse> {
   return postJson<FeedbackResponse>('/api/v1/feedback', request)
+}
+
+export function checkWork(
+  request: CheckWorkRequest,
+  signal?: AbortSignal,
+): Promise<CheckWorkResponse> {
+  return postJson<CheckWorkResponse>('/api/v1/check-work', request, signal)
 }

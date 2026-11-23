@@ -1,4 +1,4 @@
-"""Deterministic SymPy verification engine (Phase 2A).
+"""Deterministic SymPy verification engine (Phase 2A, extended in Phase 2B).
 
 Scope, deliberately bounded: single-variable linear and quadratic
 equations, rational/integer coefficients, exact real roots (including
@@ -18,7 +18,11 @@ because it satisfies an algebraically-transformed equation.
 
 Each step below (`classify`, `solve_real`, `check_candidate`,
 `compare_to_solution_set`) is a small, independently testable function;
-`verify()` is only the orchestration of those pieces.
+`verify()` is only the orchestration of those pieces for a single
+equation. `check_steps()` (Phase 2B) reuses every one of them to verify
+an ordered chain of student equation steps — there is deliberately no
+second parser or solver; see `docs/verification.md`'s "Check My Work"
+section.
 """
 
 from dataclasses import dataclass, field
@@ -368,4 +372,260 @@ def verify(equation_text: str, variable: str, solution_texts: list[str]) -> Veri
         detail=f"{comparison.missing_count} real solution(s) were not proposed",
         complete=False,
         candidates=candidates,
+    )
+
+
+# --- Phase 2B: ordered step-by-step verification ("Check My Work") --------
+
+TransitionKind = Literal[
+    "equivalent",
+    "narrowing",
+    "broadening",
+    "partial_overlap",
+    "incompatible",
+    "unsupported",
+    "indeterminate",
+]
+StepCheckStatus = Literal[
+    "all_steps_equivalent",
+    "valid_but_incomplete",
+    "invalid_step_found",
+    "unsupported",
+    "verification_incomplete",
+]
+
+_TRANSITION_DETAIL: dict[TransitionKind, str] = {
+    "equivalent": "this step preserves the real solution set",
+    "narrowing": (
+        "this step removes one or more possible solutions; check whether "
+        "you are considering only one branch"
+    ),
+    "broadening": (
+        "this transformation may introduce extraneous solutions; the final "
+        "answer must still be checked against the original equation"
+    ),
+    "partial_overlap": (
+        "this step drops at least one previously valid solution and introduces "
+        "at least one new one; it does not preserve the solution set"
+    ),
+    "incompatible": "this step changes the solution set incompatibly with the previous equation",
+}
+
+_STATUS_DETAIL: dict[StepCheckStatus, str] = {
+    "all_steps_equivalent": "every step preserves the original real solution set exactly",
+    "valid_but_incomplete": (
+        "no provably incorrect step was found, but at least one step changed the "
+        "solution set (narrowing, broadening, or partial overlap) instead of "
+        "preserving it exactly"
+    ),
+    "invalid_step_found": "a provably incorrect step was found",
+    "unsupported": "the original equation is outside the supported verification grammar",
+    "verification_incomplete": (
+        "at least one step could not be verified, so the full chain's "
+        "correctness could not be established"
+    ),
+}
+
+
+@dataclass
+class StepOutcome:
+    index: int  # 1-based; the original equation is step 0 and is not in this list
+    equation: str
+    category: Category
+    transition: TransitionKind
+    detail: str
+
+
+@dataclass
+class StepCheckOutcome:
+    status: StepCheckStatus
+    steps: list[StepOutcome]
+    first_invalid_step_index: int | None
+    first_non_equivalent_step_index: int | None
+    chain_preserves_solution_set: bool | None
+    deterministic: bool
+    detail: str
+    final_answer: VerificationOutcome | None
+
+
+def classify_transition(old_set: sympy.Set, new_set: sympy.Set) -> TransitionKind:
+    """Both sets must already be decidable (see `is_decidable_set`) —
+    callers handle the undecidable case separately as `"indeterminate"`,
+    this function only compares two known sets exactly:
+
+    - equal → `"equivalent"`.
+    - `new_set` a nonempty proper subset of `old_set` → `"narrowing"`
+      (some solutions kept, some dropped — a legitimate single-branch
+      selection, not an error on its own).
+    - `old_set` a proper subset of `new_set` → `"broadening"` (every old
+      solution survives, but new ones appeared that still need
+      independent checking against the original equation).
+    - disjoint (including `new_set` empty while `old_set` isn't) →
+      `"incompatible"` — nothing of the previous solution set survived,
+      which is the one case this function reports as provably wrong.
+    - otherwise, a genuine partial overlap (shares some elements, proper
+      subset of neither) → `"partial_overlap"`: this both drops a valid
+      solution and introduces an unverified one, so it cannot be treated
+      as a safe branch choice the way pure narrowing can.
+    """
+    if old_set == new_set:
+        return "equivalent"
+    if new_set != sympy.S.EmptySet and (new_set - old_set) == sympy.S.EmptySet:
+        return "narrowing"
+    if (old_set - new_set) == sympy.S.EmptySet:
+        return "broadening"
+    if old_set.intersect(new_set) == sympy.S.EmptySet:
+        return "incompatible"
+    return "partial_overlap"
+
+
+def check_steps(
+    equation_text: str,
+    variable: str,
+    step_texts: list[str],
+    solution_texts: list[str] | None,
+) -> StepCheckOutcome:
+    """Verifies an ordered chain of student equation steps against the
+    original equation (step 0), and — independently — the proposed final
+    `solution_texts` against the *original* equation via `verify()`
+    (never against whatever the student's last step happened to be).
+    `solution_texts=None` means no final answer was submitted; `[]` is
+    the existing Phase 2A claim of "no real solutions" (see `verify()`).
+
+    A step whose own equation can't be parsed or classified, or whose
+    solution set can't be decided, breaks verification continuity: it is
+    reported honestly as `"unsupported"`/`"indeterminate"` rather than
+    silently reusing stale state, and the *next* step (if its own
+    equation checks out) resumes comparisons from its own solution set —
+    the gap itself is marked, not papered over, but one bad step doesn't
+    permanently poison every step after it.
+    """
+
+    def _no_checkable_result(detail: str) -> StepCheckOutcome:
+        return StepCheckOutcome(
+            status="unsupported",
+            steps=[],
+            first_invalid_step_index=None,
+            first_non_equivalent_step_index=None,
+            chain_preserves_solution_set=None,
+            deterministic=True,
+            detail=detail,
+            final_answer=None,
+        )
+
+    try:
+        lhs0, rhs0 = parse_equation(equation_text, variable)
+    except ParseError as exc:
+        return _no_checkable_result(f"could not parse the original equation: {exc}")
+
+    var = sympy.Symbol(variable)
+    category0 = classify(lhs0, rhs0, var)
+    if category0 is None:
+        _, detail0 = _classification_failure(lhs0, rhs0, var)
+        return _no_checkable_result(detail0)
+
+    original_set = solve_real(lhs0, rhs0, var)
+    previous_set: sympy.Set | None = original_set if is_decidable_set(original_set) else None
+
+    steps: list[StepOutcome] = []
+    first_invalid: int | None = None
+    first_non_equivalent: int | None = None
+    continuity_lost = previous_set is None
+    any_indeterminate = False
+
+    for index, step_text in enumerate(step_texts, start=1):
+        try:
+            lhs_i, rhs_i = parse_equation(step_text, variable)
+        except ParseError as exc:
+            steps.append(
+                StepOutcome(
+                    index,
+                    step_text,
+                    "unsupported",
+                    "unsupported",
+                    f"could not parse this step: {exc}",
+                )
+            )
+            previous_set = None
+            continuity_lost = True
+            continue
+
+        category_i = classify(lhs_i, rhs_i, var)
+        if category_i is None:
+            _, detail_i = _classification_failure(lhs_i, rhs_i, var)
+            steps.append(StepOutcome(index, step_text, "unsupported", "unsupported", detail_i))
+            previous_set = None
+            continuity_lost = True
+            continue
+
+        current_set = solve_real(lhs_i, rhs_i, var)
+        if not is_decidable_set(current_set):
+            steps.append(
+                StepOutcome(
+                    index,
+                    step_text,
+                    category_i,
+                    "indeterminate",
+                    "the exact real solution set for this step could not be established",
+                )
+            )
+            previous_set = None
+            continuity_lost = True
+            any_indeterminate = True
+            continue
+
+        if previous_set is None:
+            steps.append(
+                StepOutcome(
+                    index,
+                    step_text,
+                    category_i,
+                    "unsupported",
+                    "verification continuity was lost at an earlier step",
+                )
+            )
+            previous_set = current_set  # recover: resume comparisons from here
+            continue
+
+        transition = classify_transition(previous_set, current_set)
+        steps.append(
+            StepOutcome(index, step_text, category_i, transition, _TRANSITION_DETAIL[transition])
+        )
+        previous_set = current_set
+
+        if transition != "equivalent" and first_non_equivalent is None:
+            first_non_equivalent = index
+        if transition == "incompatible" and first_invalid is None:
+            first_invalid = index
+
+    if first_invalid is not None:
+        status: StepCheckStatus = "invalid_step_found"
+    elif continuity_lost:
+        status = "verification_incomplete"
+    elif first_non_equivalent is not None:
+        status = "valid_but_incomplete"
+    else:
+        status = "all_steps_equivalent"
+
+    chain_preserves_solution_set: bool | None
+    if first_non_equivalent is not None:
+        chain_preserves_solution_set = False
+    elif continuity_lost:
+        chain_preserves_solution_set = None
+    else:
+        chain_preserves_solution_set = True
+
+    final_answer = (
+        None if solution_texts is None else verify(equation_text, variable, solution_texts)
+    )
+
+    return StepCheckOutcome(
+        status=status,
+        steps=steps,
+        first_invalid_step_index=first_invalid,
+        first_non_equivalent_step_index=first_non_equivalent,
+        chain_preserves_solution_set=chain_preserves_solution_set,
+        deterministic=not any_indeterminate,
+        detail=_STATUS_DETAIL[status],
+        final_answer=final_answer,
     )

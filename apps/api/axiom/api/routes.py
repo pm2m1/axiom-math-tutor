@@ -21,8 +21,16 @@ from axiom.models.evidence_routing import (
 from axiom.models.evidence_routing import WebSource as WebSourceModel
 from axiom.models.feedback import FeedbackRequest, FeedbackResponse
 from axiom.models.status import HealthResponse, StatusResponse
-from axiom.models.verification import CandidateResponse, VerifyRequest, VerifyResponse
+from axiom.models.verification import (
+    CandidateResponse,
+    CheckWorkRequest,
+    CheckWorkResponse,
+    StepResult,
+    VerifyRequest,
+    VerifyResponse,
+)
 from axiom.retrieval.evidence_judge import JudgeClient
+from axiom.verification.engine import check_steps as run_check_steps
 from axiom.verification.engine import verify as run_verification
 from axiom.web_search import WebSearchClient
 from axiom.workflow import WorkflowState, initial_state, response_from_state
@@ -179,4 +187,48 @@ def verify_equation(request: VerifyRequest) -> VerifyResponse:
         detail=outcome.detail,
         complete=outcome.complete,
         candidates=[CandidateResponse(value=c.value, valid=c.valid) for c in outcome.candidates],
+    )
+
+
+@router.post("/api/v1/check-work", response_model=CheckWorkResponse)
+def check_work(request: CheckWorkRequest) -> CheckWorkResponse:
+    """Deterministic SymPy step-by-step verification (Phase 2B) — no
+    LLM, no network call, additive to every Phase 1/2A endpoint. Reuses
+    `axiom/verification/parser.py` and `engine.py` exactly as Phase 2A
+    built them; there is no second parser or solver. See
+    docs/verification.md's "Check My Work" section."""
+    outcome = run_check_steps(request.equation, request.variable, request.steps, request.solutions)
+    final_answer = None
+    if outcome.final_answer is not None:
+        final_answer = VerifyResponse(
+            status=outcome.final_answer.status,
+            category=outcome.final_answer.category,
+            domain=outcome.final_answer.domain,
+            deterministic=outcome.final_answer.deterministic,
+            reason=outcome.final_answer.reason,
+            detail=outcome.final_answer.detail,
+            complete=outcome.final_answer.complete,
+            candidates=[
+                CandidateResponse(value=c.value, valid=c.valid)
+                for c in outcome.final_answer.candidates
+            ],
+        )
+    return CheckWorkResponse(
+        status=outcome.status,
+        steps=[
+            StepResult(
+                index=s.index,
+                equation=s.equation,
+                category=s.category,
+                transition=s.transition,
+                detail=s.detail,
+            )
+            for s in outcome.steps
+        ],
+        first_invalid_step_index=outcome.first_invalid_step_index,
+        first_non_equivalent_step_index=outcome.first_non_equivalent_step_index,
+        chain_preserves_solution_set=outcome.chain_preserves_solution_set,
+        deterministic=outcome.deterministic,
+        detail=outcome.detail,
+        final_answer=final_answer,
     )

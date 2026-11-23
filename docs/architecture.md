@@ -28,28 +28,39 @@ Browser (React) --> FastAPI --> GET /health, GET /api/v1/status
                                    -> restricted AST parser (no eval/sympify-on-string)
                                    -> SymPy Poly/solveset, exact real-domain checking
                                    -> linear/quadratic only, no LLM involved
+                              -> POST /api/v1/check-work (Phase 2B)
+                                   -> same parser/solver, ordered student steps
+                                   -> exact solution-set comparison per transition
+                                   -> first provably-invalid step, independent of
+                                      a separately-checked final answer
 ```
 
-The React frontend (Tutor mode) now calls `/api/v1/answer` for real and
-renders its `kb`/`web`/`refused`/`abstained`/`unavailable` outcomes
-distinctly, with citations and a thumbs up/down + optional-correction
-feedback control posting to `/api/v1/feedback` (Phase 1L — see
-`docs/feedback.md`). Check My Work and Practice are shown disabled with
-an honest "not available yet" note rather than silently routed to the
-same endpoint — they need Phase 2/3 work that doesn't exist.
+The React frontend now has two active modes. Tutor mode calls
+`/api/v1/answer` for real and renders its `kb`/`web`/`refused`/
+`abstained`/`unavailable` outcomes distinctly, with citations and a
+thumbs up/down + optional-correction feedback control posting to
+`/api/v1/feedback` (Phase 1L — see `docs/feedback.md`). Check My Work
+(Phase 2B — see `docs/verification.md`) calls `/api/v1/check-work` for
+real: ordered step inputs, an optional final answer, and a results view
+distinguishing equivalent/narrowing/broadening/partial-overlap/
+incompatible/unsupported/indeterminate transitions, with the first
+provably incorrect step flagged explicitly. Practice is shown disabled
+with an honest "not available yet" note rather than silently routed to
+an existing endpoint — it needs Phase 3 work that doesn't exist.
 `/api/v1/question` (Phase 1J, see `docs/evidence-routing.md`) still has
 no frontend caller; it exists for routing-only use. The backend's only
 persistence is Qdrant's vector store and the feedback SQLite file.
 
-`POST /api/v1/verify` (Phase 2A, see `docs/verification.md`) is the
-first real piece of the "Verifier" box in the target diagram below — a
-deterministic SymPy engine for single-variable linear/quadratic
-equations, with its own restricted expression parser (no `eval`, no
-`sympy.sympify` on a string). It is deliberately standalone: nothing in
-the Phase 1K LangGraph workflow calls it, and `/api/v1/answer`'s
-LLM-generated explanations are still not "formally verified" merely
-because this exists alongside them — wiring deterministic verification
-into Check My Work's actual tutoring flow is Phase 2B, not this phase.
+`POST /api/v1/verify` and `POST /api/v1/check-work` (Phase 2A/2B, see
+`docs/verification.md`) are the first real piece of the "Verifier" box
+in the target diagram below — a deterministic SymPy engine for
+single-variable linear/quadratic equations, with its own restricted
+expression parser (no `eval`, no `sympy.sympify` on a string), now also
+checking ordered reasoning chains, not just final candidate sets. Both
+are deliberately standalone: nothing in the Phase 1K LangGraph workflow
+calls either, and `/api/v1/answer`'s LLM-generated explanations are
+still not "formally verified" merely because this exists alongside
+them. No LLM is used anywhere in `check-work`'s error localization.
 
 ## Target
 
@@ -103,11 +114,14 @@ in the diagram only so today's structure doesn't have to be redesigned if it
 gets added later.
 
 None of the boxes above `Math Solver` and below `Tutor Policy` exist yet,
-with one exception: a narrow slice of `Verifier` now exists as the
-standalone `/api/v1/verify` endpoint (Phase 2A) — exact checking for
-linear/quadratic equations, not yet wired into the graph above it or
-into any tutoring flow below it. The roadmap (`docs/roadmap.md`)
-sequences the rest.
+with one exception: a narrow slice of `Verifier` now exists as two
+standalone endpoints — `/api/v1/verify` (Phase 2A, final candidates) and
+`/api/v1/check-work` (Phase 2B, ordered reasoning chains) — exact
+checking for linear/quadratic equations, surfaced directly to the
+student via Check My Work, but still not wired into the `Problem
+Analyzer`/`Routing Engine`/`Misconception Diagnoser`/`Tutor Policy`
+boxes above and below it. The roadmap (`docs/roadmap.md`) sequences the
+rest.
 
 ## The core separation: solver, verifier, tutor
 
@@ -149,7 +163,8 @@ answer:
 - **Deterministic**: symbolic simplification and equation solving
   (SymPy — `/api/v1/verify`, Phase 2A, for single-variable
   linear/quadratic equations today), numeric evaluation, checking a
-  student's step against the previous one, retrieval scoring/ranking,
+  student's step against the previous one (`/api/v1/check-work`, Phase
+  2B, via exact solution-set comparison), retrieval scoring/ranking,
   mastery updates given an outcome.
 - **LLM-mediated**: understanding a free-text question, generating candidate
   solution steps for the solver to verify, phrasing a hint, diagnosing which

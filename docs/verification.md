@@ -1,4 +1,4 @@
-# Deterministic mathematical verification (Phase 2A)
+# Deterministic mathematical verification (Phase 2A/2B)
 
 `POST /api/v1/verify` checks a proposed solution set against a
 single-variable equation using SymPy exact computation — no LLM, no
@@ -137,38 +137,209 @@ exercised explicitly — an empty submitted list is correct against the
 second and incorrect against the first, which is exactly the
 distinction the project asked this engine to get right.
 
+## Check My Work (Phase 2B)
+
+`POST /api/v1/check-work` verifies an ordered chain of student equation
+steps against the original equation, identifies the earliest step that
+is *provably* wrong, and — independently — checks a proposed final
+answer against the *original* equation using the exact same `verify()`
+Phase 2A already validated. No second parser, no second solver: every
+step is parsed by `axiom/verification/parser.py` and solved by
+`axiom/verification/engine.py::solve_real()`, exactly as Phase 2A built
+them.
+
+### Request / response
+
+```json
+POST /api/v1/check-work
+{
+  "equation": "2*x + 3 = 11",
+  "variable": "x",
+  "steps": ["2*x = 8", "x = 5"],
+  "solutions": ["4"]
+}
+```
+
+```json
+{
+  "status": "invalid_step_found",
+  "steps": [
+    {"index": 1, "equation": "2*x = 8", "category": "linear",
+     "transition": "equivalent", "detail": "this step preserves the real solution set"},
+    {"index": 2, "equation": "x = 5", "category": "linear",
+     "transition": "incompatible",
+     "detail": "this step changes the solution set incompatibly with the previous equation"}
+  ],
+  "first_invalid_step_index": 2,
+  "first_non_equivalent_step_index": 2,
+  "chain_preserves_solution_set": false,
+  "deterministic": true,
+  "detail": "a provably incorrect step was found",
+  "final_answer": {
+    "status": "verified_correct", "category": "linear", "domain": "real",
+    "deterministic": true, "reason": null,
+    "detail": "the proposed solution set matches the exact real solution set",
+    "complete": true, "candidates": [{"value": "4", "valid": true}]
+  }
+}
+```
+
+The original equation is step 0 and is not itself in `steps`; student
+steps are numbered from 1. `steps` defaults to `[]` (max 15, each
+≤200 characters, same restricted grammar as `/api/v1/verify`).
+`solutions` distinguishes **omitted** (`null`/absent — no final answer
+submitted, `final_answer` is `null`) from an **explicit empty list**
+(`[]` — the student's claim of "no real solutions," the same convention
+`/api/v1/verify` already uses). Note in the example above: the final
+answer (`"4"`) is checked against the *original* equation, not against
+the student's last written step (`x = 5`) — it is correct even though
+step 2 was wrong, because these are two independent dimensions (see
+"Two independent dimensions" below).
+
+### Per-step transition kinds
+
+Each consecutive pair of equations (step *i-1* → step *i*) is compared
+by exact SymPy real solution set, via `classify_transition()`:
+
+| `transition` | Meaning |
+|---|---|
+| `"equivalent"` | Same real solution set exactly — the gold-standard case. |
+| `"narrowing"` | New set is a nonempty proper subset of the old one — some solutions kept, others dropped. A legitimate single-branch choice (e.g. `x^2 = 1` → `x = 1`), not an error on its own, but the chain is no longer complete. |
+| `"broadening"` | Old set is a proper subset of the new one — every old solution survives, but new ones appeared (e.g. `x = 1` → `x^2 = 1`) that still need independent checking against the original equation. |
+| `"partial_overlap"` | Shares some elements with the previous set but is a subset of neither — drops at least one previously valid solution *and* introduces at least one new one. Not a safe branch choice the way pure narrowing is. |
+| `"incompatible"` | Disjoint from the previous set (including losing every solution outright) — nothing of the previous solution set survived. The only transition this reports as **provably wrong**. |
+| `"unsupported"` | This step's own equation couldn't be parsed or classified under the restricted grammar, or verification continuity was already lost at an earlier step. |
+| `"indeterminate"` | This step's own real solution set couldn't be exactly decided by SymPy. |
+
+Only `"incompatible"` sets `first_invalid_step_index`. All four decidable
+non-equivalent kinds (`narrowing`/`broadening`/`partial_overlap`/
+`incompatible`) set `first_non_equivalent_step_index`, since each is a
+*confirmed* departure from exact equivalence; `"unsupported"`/
+`"indeterminate"` do not, because those mean "we don't know," not "we
+know it's different."
+
+### First-error indexing and continuity
+
+`first_invalid_step_index` is the transition that introduces a *provable*
+error — not merely the first step whose written form happens to differ
+from the previous one (an equivalent rearrangement, e.g. moving a term
+across the `=`, is still `"equivalent"`). A correct final answer never
+retroactively validates an earlier incorrect step, and an earlier
+non-equivalent (but not incompatible) step never, by itself, marks a
+later step wrong — each transition is judged only against its immediate
+predecessor's exact solution set.
+
+If a step's own equation can't be parsed/classified, or its solution set
+can't be exactly decided, verification continuity is lost at that point:
+that step is reported `"unsupported"`/`"indeterminate"` (never silently
+skipped and the next step validated as if nothing happened), and the
+*next* step — if its own equation does parse and solve cleanly — is
+reported `"unsupported"` with an explicit "verification continuity was
+lost at an earlier step" detail, but resumes being compared against
+*its own* solution set for everything after it. One bad step doesn't
+permanently poison the rest of the chain, but the specific gap is never
+hidden.
+
+`chain_preserves_solution_set` is `true` only if every step was exactly
+`"equivalent"`; `false` as soon as any step is a *confirmed*
+non-equivalent kind (regardless of unrelated continuity gaps elsewhere);
+`null` when the only problems were continuity gaps with no confirmed
+non-equivalence ever observed either way — genuinely unknown, not
+assumed true.
+
+### Two independent dimensions
+
+Step-reasoning correctness (`steps`, `first_invalid_step_index`,
+`chain_preserves_solution_set`) and final-answer correctness
+(`final_answer`) are deliberately kept separate, computed independently,
+and never collapsed into one boolean:
+
+- A student can make an invalid algebraic step and still submit the
+  correct final answer (by guessing, or by a later unrelated correction)
+  — `final_answer.status` can be `"verified_correct"` while
+  `status` is `"invalid_step_found"`.
+- A sequence of exactly equivalent steps can still end with an
+  incomplete or wrong final answer — `status` can be
+  `"all_steps_equivalent"` while `final_answer.status` is
+  `"incomplete"` or `"verified_incorrect"`.
+
+The API never discloses the complete correct solution set merely
+because a step or the final answer was wrong — `final_answer` reports
+exactly what `/api/v1/verify` already would for the same equation and
+candidates, nothing more. Revealing the answer on request is a
+tutoring-policy decision, deferred to a later phase.
+
+### Status meaning
+
+| `status` | Meaning |
+|---|---|
+| `"all_steps_equivalent"` | Every step preserved the original real solution set exactly. |
+| `"valid_but_incomplete"` | No provably incorrect step was found, but at least one step narrowed, broadened, or partially overlapped instead of preserving the set exactly. |
+| `"invalid_step_found"` | At least one step was confirmed incompatible with its predecessor. See `first_invalid_step_index`. |
+| `"unsupported"` | The *original* equation itself is outside the supported grammar — no steps could be checked at all (`steps` is `[]`). |
+| `"verification_incomplete"` | At least one individual step broke continuity (unparseable/unclassifiable/undecidable); later steps may still have been checked against each other once a decidable step reappeared. |
+
+### Frontend
+
+`apps/web/src/components/CheckWorkForm.tsx` — equation input, an
+add/remove list of step inputs, an optional add/remove list of
+final-answer inputs (with an explicit "this equation has no real
+solutions" action distinct from never adding any), loading/duplicate-
+submission prevention (the submit button disables while a request is in
+flight, mirroring Tutor mode's pattern), and a results view: a numbered
+list of per-step transitions with a text label for every kind (never
+color alone), the first provably incorrect step flagged with an explicit
+"First error" marker, and a separate final-answer panel. Practice mode
+remains disabled with its existing note; Tutor mode is untouched.
+
 ## Relationship to Phase 1
 
-This is a separate, additive capability. It does **not** retroactively
-make Phase 1's LLM-generated explanations (`POST /api/v1/answer`)
-"verified" — nothing calls this engine from the Phase 1K LangGraph
-workflow, and no existing route, schema, or behavior changed. Tutor mode
-and the feedback system are untouched. Check My Work remains disabled in
-the frontend with its existing "not available yet" note — wiring this
-verifier into it for real step-by-step checking is Phase 2B, not this
-milestone.
+This remains a separate, additive capability. It does **not**
+retroactively make Phase 1's LLM-generated explanations
+(`POST /api/v1/answer`) "verified" — nothing calls this engine from the
+Phase 1K LangGraph workflow, and no existing route, schema, or behavior
+changed. Tutor mode and the feedback system are untouched.
 
 ## Known limitations
 
 - **Input-size bounds are not a CPU/memory isolation guarantee.** The
   parser rejects oversized/overly-deep input before any SymPy call, and
-  the supported grammar (degree ≤ 2, bounded coefficients) keeps
-  `solveset`/`Poly` calls cheap in practice — but there is no process
-  isolation or hard wall-clock timeout in this milestone. A pathological
-  input that passes the stated bounds and still runs CPU-bound SymPy
-  work is a theoretical possibility this phase does not fully rule out;
-  measured latency across the supported test matrix is ~3 ms/call (see
-  the Phase 2A report), far from a concern at this scope, but this is
-  not the same claim as "cannot be made to run long," which would
+  the supported grammar (degree ≤ 2, bounded coefficients, ≤15 steps)
+  keeps `solveset`/`Poly` calls cheap in practice — but there is no
+  process isolation or hard wall-clock timeout in this milestone. A
+  pathological input that passes the stated bounds and still runs
+  CPU-bound SymPy work is a theoretical possibility this phase does not
+  fully rule out; measured latency is ~3 ms/call for a single
+  `/api/v1/verify` equation and ~8–20 ms/call for a representative
+  `/api/v1/check-work` chain, far from a concern at this scope, but this
+  is not the same claim as "cannot be made to run long," which would
   require process-level isolation this milestone does not add.
 - **`sqrt` is only available on proposed-solution values and inside
   equations as a literal of a constant** (e.g. `sqrt(2)`) — it is not a
   general irrational-coefficient feature, and an equation with `sqrt(x)`
   in it will not classify as polynomial (correctly `"unsupported"`).
-- **No partial credit, no step verification.** A submission is either
-  the complete correct set, individually-valid-but-incomplete, or wrong
-  — there is no notion of "close" or a diagnosed error location. That is
-  Phase 2B/3 (Check My Work, misconception diagnosis).
+- **A step that algebraically reduces to a pure numeric statement with
+  no trace of the variable** (e.g. simplifying `2*x = 2*x` down to
+  `0 = 0`, or `3*x = 3*x + 1` down to `0 = 1`) **is `"unsupported"` for
+  that step**, by the same rule `classify()` already applies to the
+  original equation (Phase 2A) — there is nothing to classify a
+  variable's solution set for once the variable is gone. This is a
+  common, legitimate simplification a student might write; Axiom can
+  only say "verification continuity was lost here," not confirm or deny
+  it, and resumes from the next step that still mentions the variable.
+- **No named-misconception diagnosis, no partial credit, no "how close
+  was this" scoring.** A transition is one of seven exact
+  classifications; there is no notion of a near-miss or a specific
+  identified arithmetic slip beyond what the transition label and its
+  short detail already say. Mapping a wrong step to a named
+  misconception taxonomy is explicitly deferred to a later phase, and no
+  LLM is used anywhere in this error-localization path.
+- **Classification identifies *what changed about the solution set*, not
+  *which arithmetic operation produced it* or *why*.** Two different
+  mistakes that happen to produce the same resulting solution set are
+  indistinguishable from each other; Axiom reports the set-level
+  consequence, never a claimed proof of the specific operation the
+  student performed.
 - **No mypy stubs for SymPy** — `pyproject.toml` ignores missing SymPy
   type information the same way it already does for `rank_bm25` and
   `scikit-learn`; this is a project-wide pattern, not new risk specific
