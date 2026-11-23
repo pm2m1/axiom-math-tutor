@@ -41,8 +41,11 @@ base with measured BM25/dense/hybrid/Qdrant retrieval baselines, a Meta
 LLM evidence-sufficiency judge, a Tavily web-search fallback, a LangGraph
 workflow with an input guardrail and evidence-grounded answer generation,
 a React frontend that calls it for real, and persisted human feedback.
-None of this is verified mathematics or adaptive tutoring — see the table
-below and `docs/roadmap.md`'s Phase 1 acceptance checklist.
+Phase 2A adds a standalone, deterministic SymPy verification engine for
+single-variable linear/quadratic equations — no LLM involved, and not
+yet wired into Tutor mode's explanations or Check My Work. See the table
+below, `docs/roadmap.md`'s Phase 1 acceptance checklist, and
+`docs/verification.md`.
 
 | Area | Status |
 | --- | --- |
@@ -52,8 +55,9 @@ below and `docs/roadmap.md`'s Phase 1 acceptance checklist.
 | LangGraph agentic workflow, evidence-grounded answer generation | Implemented |
 | React frontend wired to `/api/v1/answer`; Tutor mode only | Implemented |
 | Human feedback (thumbs up/down, optional correction, SQLite) | Implemented |
-| Check My Work, Practice modes | Planned (Phase 2/3) |
-| SymPy-based verification, confidence/abstention | Planned |
+| Deterministic SymPy verification (`/api/v1/verify`, linear/quadratic only) | Implemented (standalone) |
+| Check My Work, Practice modes | Planned (Phase 2B/3) |
+| Verification wired into Tutor/Check My Work, confidence/abstention | Planned |
 | Student model, misconception diagnosis, hint ladder | Planned |
 | JEEBench / MathTutorBench evaluation | Planned |
 | Lean-based formal verification | Research direction |
@@ -82,6 +86,7 @@ axiom-math-tutor/
     ├── evidence-routing.md
     ├── agentic-workflow.md
     ├── feedback.md
+    ├── verification.md
     └── decisions/    Architecture decision records
 ```
 
@@ -99,8 +104,10 @@ uv run uvicorn axiom.main:app --reload
 
 The API serves `GET /health` and `GET /api/v1/status` on
 `http://localhost:8000`, plus `POST /api/v1/question`, `POST /api/v1/answer`,
-and `POST /api/v1/feedback` — see `docs/evidence-routing.md`,
-`docs/agentic-workflow.md`, and `docs/feedback.md`.
+`POST /api/v1/feedback`, and `POST /api/v1/verify` — see
+`docs/evidence-routing.md`, `docs/agentic-workflow.md`, `docs/feedback.md`,
+and `docs/verification.md`. `/api/v1/verify` needs no credentials and
+makes no network call — it's pure local SymPy computation.
 
 ### Frontend
 
@@ -201,7 +208,10 @@ npm run test    # vitest, offline — mocks the API client, no real backend call
   workflow, a real frontend integration, and persisted human-in-the-loop
   feedback — see `docs/roadmap.md` for the full acceptance checklist.
 - **Phase 2 — Verified mathematical reasoning**: problem routing, SymPy
-  verification, confidence/abstention, reasoning traces.
+  verification, confidence/abstention, reasoning traces. *(Phase
+  2A — a standalone deterministic verification engine for
+  single-variable linear/quadratic equations — is done; see
+  `docs/verification.md`.)*
 - **Phase 3 — Adaptive tutoring**: student model, misconception diagnosis,
   hint ladder, targeted remediation, prerequisite graph.
 - **Phase 4 — Evaluation and research**: JEEBench, a custom tutoring

@@ -273,12 +273,52 @@ The minimum scope required by the originating assignment.
 
 ## Phase 2 — Verified mathematical reasoning
 
+**Phase 2A — deterministic verification engine (done):**
+
+- [x] `POST /api/v1/verify` — exact SymPy verification for
+      single-variable linear and quadratic equations (rational
+      coefficients, real-domain roots including simple irrationals) —
+      additive, no LLM, no network call, no change to any Phase 1
+      route or behavior. See `docs/verification.md`
+- [x] Restricted expression parser (`axiom/verification/parser.py`): an
+      `ast.parse`-based walker, never `eval`/`exec`/`sympy.sympify`-on-a-
+      string/`parse_expr`; default-deny on attribute/subscript access,
+      arbitrary calls, other names, variable-dependent denominators,
+      and bounded on literal magnitude, exponent, expression length,
+      AST node count, and AST depth
+- [x] Small, independently testable engine functions (`classify`,
+      `solve_real`, `is_decidable_set`, `check_candidate`,
+      `compare_to_solution_set`) composed by `verify()`; candidate
+      validity always checked against the original equation, never a
+      transformed form
+- [x] Five typed outcomes (`verified_correct`, `verified_incorrect`,
+      `incomplete`, `unsupported`, `indeterminate`) distinguishing a
+      correct complete set, an individually-valid-but-incomplete set,
+      an incorrect/extraneous candidate, no real solutions (exactly
+      verified, distinguished from an infinite-solution identity), an
+      out-of-scope problem, and an unresolved symbolic result
+- [x] Hand-checked test matrix (108 new tests: parser, engine
+      unit-level, and `TestClient` route-level) covering linear and
+      quadratic correctness, degenerate/identity/contradiction cases,
+      higher-degree/multivariable/denominator/injection-attempt
+      rejections, duplicate roots, and the indeterminate path
+      (exercised directly, since the bounded grammar doesn't reach it
+      through real input) — all offline, zero Meta/Tavily calls
+- [x] Measured latency: ~3 ms/call average across the supported test
+      matrix; documented as not a CPU/memory isolation guarantee (no
+      process isolation in this milestone — see `docs/verification.md`'s
+      "Known limitations")
+
+**Still open for Phase 2:**
+
 - [ ] Problem router: classify a question into a small set of solvable
       categories (e.g., algebraic equation, calculus, arithmetic word
       problem) rather than always going straight to an LLM
-- [ ] SymPy-backed solver for the categories that support it
-- [ ] Deterministic verifier that checks candidate solutions against SymPy
-      rather than asking an LLM to grade itself
+- [ ] Extending the SymPy solver/verifier beyond linear/quadratic
+      (higher-degree polynomials, systems of equations, inequalities)
+- [ ] Wiring deterministic verification into Check My Work's actual
+      tutoring flow (Phase 2B) — `/api/v1/verify` is standalone today,
+      not called from the LangGraph workflow or the frontend
 - [ ] Confidence scoring and an explicit abstention path (the system says
       "I can't verify this" instead of presenting an unverified guess as
       fact)

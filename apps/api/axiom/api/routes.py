@@ -21,7 +21,9 @@ from axiom.models.evidence_routing import (
 from axiom.models.evidence_routing import WebSource as WebSourceModel
 from axiom.models.feedback import FeedbackRequest, FeedbackResponse
 from axiom.models.status import HealthResponse, StatusResponse
+from axiom.models.verification import CandidateResponse, VerifyRequest, VerifyResponse
 from axiom.retrieval.evidence_judge import JudgeClient
+from axiom.verification.engine import verify as run_verification
 from axiom.web_search import WebSearchClient
 from axiom.workflow import WorkflowState, initial_state, response_from_state
 
@@ -159,4 +161,22 @@ def submit_feedback(
         correction=record.correction,
         answer_status=record.answer_status,
         created_at=record.created_at,
+    )
+
+
+@router.post("/api/v1/verify", response_model=VerifyResponse)
+def verify_equation(request: VerifyRequest) -> VerifyResponse:
+    """Deterministic SymPy verification (Phase 2A) — no LLM, no network
+    call, additive to every Phase 1 endpoint. See docs/verification.md
+    for the supported grammar and the precise meaning of each status."""
+    outcome = run_verification(request.equation, request.variable, request.solutions)
+    return VerifyResponse(
+        status=outcome.status,
+        category=outcome.category,
+        domain=outcome.domain,
+        deterministic=outcome.deterministic,
+        reason=outcome.reason,
+        detail=outcome.detail,
+        complete=outcome.complete,
+        candidates=[CandidateResponse(value=c.value, valid=c.valid) for c in outcome.candidates],
     )

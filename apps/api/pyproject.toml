@@ -19,6 +19,7 @@ dependencies = [
     "openai>=3.57.0",
     "mcp>=2.3.0",
     "langgraph>=1.2.24",
+    "sympy>=1.14.0",
 ]
 
 [dependency-groups]
@@ -58,4 +59,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "sklearn.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "sympy.*"
 ignore_missing_imports = true
