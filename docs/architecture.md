@@ -10,12 +10,19 @@ description below is.
 
 ```text
 Browser (React) --> FastAPI --> GET /health, GET /api/v1/status
+                              -> POST /api/v1/question
+                                   -> hybrid retrieval (BM25 + Qdrant dense + RRF)
+                                   -> Meta evidence judge (muse-spark-1.3)
+                                   -> sufficient: cited KB chunks
+                                      insufficient: one Tavily MCP web search
 ```
 
 The frontend renders a static shell (mode selector, question form) with no
-backend call wired to it beyond the status check. The backend has no
-persistence, no LLM integration, and no business logic beyond returning a
-fixed status payload built from `Settings`.
+backend call wired to it beyond the status check — `POST /api/v1/question`
+(Phase 1J, see `docs/evidence-routing.md`) exists and is tested, but the
+frontend doesn't call it yet. The backend has no persistence and no
+answer-generation LLM call; `/api/v1/question` only routes a question to
+cited KB evidence or web search results, it does not answer the question.
 
 ## Target
 
@@ -166,9 +173,14 @@ no benefit on the common case.
 
 Qdrant now persists the dense retriever's vectors, either embedded locally
 or via a real server (`compose.yaml`, Phase 1D/1E — see
-`docs/retrieval-evaluation.md`), but the confidence threshold and web
-fallback described here are still unimplemented; retrieval is not yet
-wired into a request path at all.
+`docs/retrieval-evaluation.md`). The KB-first-then-web ordering above is
+now implemented as `POST /api/v1/question` (Phase 1J — see
+`docs/evidence-routing.md`): the LLM evidence judge (Phase 1I) replaces
+the "confidence threshold" sketched here, and web fallback is a single
+Tavily MCP search, not yet the richer MCP/Routing Engine box in the
+target diagram below. This is evidence routing only — no answer
+generation, no guardrails, no student model, no feedback loop, and the
+frontend doesn't call it yet.
 
 ## Human feedback philosophy
 

@@ -171,6 +171,27 @@ The minimum scope required by the originating assignment.
       (the core failure class this phase targeted) were correctly
       rejected. See `docs/kb-sufficiency.md` for the full breakdown.
 
+**Phase 1J — evidence routing and web fallback (done):**
+
+- [x] `POST /api/v1/question` — the first live request path: hybrid
+      retrieval (unchanged) → Meta evidence judge (unchanged, Phase 1I)
+      → cited KB chunks if sufficient, one Tavily MCP web search if not.
+      Evidence routing only, no answer generation — see
+      `docs/evidence-routing.md`
+- [x] Dependency failures (judge unavailable/failed, retrieval
+      unavailable, MCP unavailable/failed) are explicit typed outcomes;
+      a judge failure never triggers web search; no raw provider error,
+      traceback, or credential ever reaches the response body
+- [x] Retrieval pipeline, judge, and search client are process-scoped
+      singletons (`axiom/api/dependencies.py`) — a request never
+      re-embeds the corpus or reloads a model; live requests are
+      deliberately uncached and never touch Phase 1I's benchmark
+      `JudgeCache`/`RequestPacer`
+- [x] Offline tests (`tests/test_evidence_routing.py`) cover all three
+      routes plus every dependency-failure sub-case via
+      `app.dependency_overrides` — no network, no API keys required for
+      normal `pytest`
+
 **Still open for Phase 1:**
 
 - [ ] Input/output guardrails (reject non-math input, refuse to leak system
@@ -178,14 +199,11 @@ The minimum scope required by the originating assignment.
 - [ ] Diagnosing why Qdrant BM25 regresses the hybrid despite comparable
       standalone lexical metrics, before trying a different BM25
       configuration or reranking
-- [ ] Deciding whether to wire the Meta judge into live KB-vs-fallback
-      routing, given Phase 1I's result — not done automatically; a
-      deliberate next-phase decision
 - [ ] Optionally running the historical v1/v2 sets against the LLM judge
       for additional context — deferred in Phase 1I to conserve quota,
       not required for the v3 decision
-- [ ] Web search / MCP fallback, gated by whatever sufficiency decision
-      Phase 1G/1H/1I or their successor validates
+- [ ] Wiring `POST /api/v1/question` into the frontend (currently
+      backend-only, no UI calls it yet)
 - [ ] LangGraph workflow tying analyzer → retrieval → routing → response
       together with explicit typed state
 - [ ] Human-in-the-loop feedback capture (thumbs up/down or equivalent,

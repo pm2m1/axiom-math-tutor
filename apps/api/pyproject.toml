@@ -17,6 +17,7 @@ dependencies = [
     "scikit-learn>=1.9.0",
     "google-genai>=2.20.0",
     "openai>=3.57.0",
+    "mcp>=2.3.0",
 ]
 
 [dependency-groups]
@@ -40,6 +41,11 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's own dependency-injection pattern (Depends(...) as an argument
+# default) is not the mutable-default-argument bug B008 flags.
+extend-immutable-calls = ["fastapi.Depends"]
 
 [tool.mypy]
 python_version = "3.12"
