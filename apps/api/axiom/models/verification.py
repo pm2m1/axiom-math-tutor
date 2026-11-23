@@ -101,10 +101,13 @@ class CheckWorkResponse(BaseModel):
     - `"all_steps_equivalent"` — every step preserved the exact real
       solution set of the original equation.
     - `"valid_but_incomplete"` — no provably incorrect step was found,
-      but at least one step narrowed, broadened, or partially overlapped
-      the previous solution set instead of preserving it exactly.
+      but at least one step narrowed or broadened the previous solution
+      set instead of preserving it exactly.
     - `"invalid_step_found"` — at least one step was provably
-      incompatible with the previous one; see `first_invalid_step_index`.
+      incompatible with the previous one, or dropped a genuine solution
+      while introducing an unverified one (`"partial_overlap"`, which is
+      treated with the same severity as `"incompatible"` — see
+      `first_invalid_step_index`).
     - `"unsupported"` — the *original* equation itself is outside the
       supported grammar; no steps could be checked at all (`steps` is
       empty).

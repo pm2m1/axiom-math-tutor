@@ -28,7 +28,7 @@ const TRANSITION_LABEL: Record<TransitionKind, string> = {
   equivalent: 'Equivalent',
   narrowing: 'Narrows the solution set',
   broadening: 'Broadens the solution set',
-  partial_overlap: 'Partially overlapping solution set',
+  partial_overlap: 'Partial overlap — provably incorrect',
   incompatible: 'Incompatible — provably incorrect',
   unsupported: 'Unsupported',
   indeterminate: 'Indeterminate',

@@ -318,11 +318,14 @@ The minimum scope required by the originating assignment.
 - [x] `classify_transition()` — exact SymPy set comparison distinguishing
       `equivalent`, `narrowing` (legitimate single-branch choice),
       `broadening` (introduces solutions needing independent recheck),
-      `partial_overlap` (drops one valid solution and gains an
-      unverified one — neither a safe branch nor a clean extension),
-      and `incompatible` (the one transition reported as provably
-      wrong); never collapses a non-equivalent step into "arithmetic
-      mistake" by default
+      `partial_overlap`, and `incompatible`; never collapses a
+      non-equivalent step into "arithmetic mistake" by default.
+      `partial_overlap` (drops one valid solution while gaining a
+      different, unverified one) is treated with the same severity as
+      `incompatible` — both set `first_invalid_step_index` — since
+      losing a genuine solution is never something a legitimate
+      narrowing or broadening does on its own (caught and fixed before
+      publication; see the Phase 2B audit, below)
 - [x] First-error localization: `first_invalid_step_index` (the first
       *provably* wrong transition) kept distinct from
       `first_non_equivalent_step_index` (the first *confirmed*
@@ -355,10 +358,25 @@ The minimum scope required by the originating assignment.
       no-real-solution/identity/contradiction cases, the four
       final-answer/step-correctness combinations, and
       injection/denominator/degree/malformed/continuity-loss rejections
-      — 42 engine + 18 route-level, all offline, zero Meta/Tavily calls
+      — 46 engine + 19 route-level (65 total, updated by the
+      correctness audit below), all offline, zero Meta/Tavily calls
 - [x] Measured latency: ~8–20 ms/call across representative valid and
       invalid step chains (up to 3–4 steps); same no-process-isolation
       caveat as Phase 2A, documented in `docs/verification.md`
+- [x] **Pre-publication correctness audit**: `partial_overlap` was
+      initially bucketed with `narrowing`/`broadening` as merely
+      "incomplete," not provably wrong. Audited before publishing and
+      corrected: losing a genuine solution is never something a
+      legitimate narrowing or broadening does without cause, so
+      `partial_overlap` now sets `first_invalid_step_index` the same as
+      `incompatible` does (`axiom/verification/engine.py`'s
+      `check_steps()`). Continuity handling (an unsupported middle step
+      can't be retroactively certified by a later clean comparison; an
+      earlier confirmed error is never cleared by later steps) was
+      independently re-verified and found already correct — no change
+      needed there. Fixed in a separate, narrowly-scoped commit
+      (`fix: classify unsound step transitions`), not folded into the
+      original Phase 2B commit.
 
 **Still open for Phase 2:**
 

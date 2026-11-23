@@ -206,17 +206,30 @@ by exact SymPy real solution set, via `classify_transition()`:
 | `"equivalent"` | Same real solution set exactly — the gold-standard case. |
 | `"narrowing"` | New set is a nonempty proper subset of the old one — some solutions kept, others dropped. A legitimate single-branch choice (e.g. `x^2 = 1` → `x = 1`), not an error on its own, but the chain is no longer complete. |
 | `"broadening"` | Old set is a proper subset of the new one — every old solution survives, but new ones appeared (e.g. `x = 1` → `x^2 = 1`) that still need independent checking against the original equation. |
-| `"partial_overlap"` | Shares some elements with the previous set but is a subset of neither — drops at least one previously valid solution *and* introduces at least one new one. Not a safe branch choice the way pure narrowing is. |
-| `"incompatible"` | Disjoint from the previous set (including losing every solution outright) — nothing of the previous solution set survived. The only transition this reports as **provably wrong**. |
+| `"partial_overlap"` | Shares some elements with the previous set but is a subset of neither — drops at least one previously valid solution *and* introduces a different, unverified one. Reported as **provably wrong**, the same as `"incompatible"` — see below. |
+| `"incompatible"` | Disjoint from the previous set (including losing every solution outright) — nothing of the previous solution set survived. Reported as **provably wrong**. |
 | `"unsupported"` | This step's own equation couldn't be parsed or classified under the restricted grammar, or verification continuity was already lost at an earlier step. |
 | `"indeterminate"` | This step's own real solution set couldn't be exactly decided by SymPy. |
 
-Only `"incompatible"` sets `first_invalid_step_index`. All four decidable
-non-equivalent kinds (`narrowing`/`broadening`/`partial_overlap`/
-`incompatible`) set `first_non_equivalent_step_index`, since each is a
-*confirmed* departure from exact equivalence; `"unsupported"`/
-`"indeterminate"` do not, because those mean "we don't know," not "we
-know it's different."
+**Why `"partial_overlap"` is provably wrong, not merely incomplete:**
+pure narrowing only ever *drops* solutions (a legitimate single-branch
+choice — e.g. taking one root of a square root), and pure broadening
+only ever *adds* them (e.g. squaring both sides) — neither, on its own,
+ever loses a genuine solution without cause. A transition that *both*
+drops a previously valid solution *and* introduces a different one
+cannot be produced by any single legitimate algebraic operation this
+engine recognizes; the dropped solution alone is enough to call it
+wrong, regardless of what else appeared. `"incompatible"` is the limit
+case of this same problem (nothing at all survives); `"partial_overlap"`
+keeps a separate label only because "lost X, gained Y" is a more useful
+diagnostic than plain disjointness.
+
+Both `"incompatible"` and `"partial_overlap"` set
+`first_invalid_step_index`. All four decidable non-equivalent kinds
+(`narrowing`/`broadening`/`partial_overlap`/`incompatible`) set
+`first_non_equivalent_step_index`, since each is a *confirmed* departure
+from exact equivalence; `"unsupported"`/`"indeterminate"` do not,
+because those mean "we don't know," not "we know it's different."
 
 ### First-error indexing and continuity
 
@@ -274,8 +287,8 @@ tutoring-policy decision, deferred to a later phase.
 | `status` | Meaning |
 |---|---|
 | `"all_steps_equivalent"` | Every step preserved the original real solution set exactly. |
-| `"valid_but_incomplete"` | No provably incorrect step was found, but at least one step narrowed, broadened, or partially overlapped instead of preserving the set exactly. |
-| `"invalid_step_found"` | At least one step was confirmed incompatible with its predecessor. See `first_invalid_step_index`. |
+| `"valid_but_incomplete"` | No provably incorrect step was found, but at least one step narrowed or broadened instead of preserving the set exactly. |
+| `"invalid_step_found"` | At least one step was confirmed incompatible with its predecessor, or dropped a genuine solution while introducing an unverified one (`"partial_overlap"`). See `first_invalid_step_index`. |
 | `"unsupported"` | The *original* equation itself is outside the supported grammar — no steps could be checked at all (`steps` is `[]`). |
 | `"verification_incomplete"` | At least one individual step broke continuity (unparseable/unclassifiable/undecidable); later steps may still have been checked against each other once a decidable step reappeared. |
 

@@ -171,6 +171,35 @@ describe('CheckWorkForm', () => {
     expect(screen.getByText('Equivalent')).toBeInTheDocument()
   })
 
+  it('flags a partial-overlap step as the first error, not as a mere warning', async () => {
+    vi.mocked(checkWork).mockResolvedValue(
+      baseResponse({
+        status: 'invalid_step_found',
+        first_invalid_step_index: 1,
+        first_non_equivalent_step_index: 1,
+        chain_preserves_solution_set: false,
+        detail: 'a provably incorrect step was found',
+        steps: [
+          {
+            index: 1,
+            equation: '(x-2)*(x-3) = 0',
+            category: 'quadratic',
+            transition: 'partial_overlap',
+            detail:
+              'this step drops at least one previously valid solution while introducing a different, unverified one',
+          },
+        ],
+      }),
+    )
+
+    render(<CheckWorkForm />)
+    setEquation('(x-1)*(x-2) = 0')
+    submit()
+
+    expect(await screen.findByText(/first error/i)).toBeInTheDocument()
+    expect(screen.getByText('Partial overlap — provably incorrect')).toBeInTheDocument()
+  })
+
   it('shows non-equivalent warnings for narrowing and broadening without flagging them as errors', async () => {
     vi.mocked(checkWork).mockResolvedValue(
       baseResponse({

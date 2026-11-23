@@ -58,6 +58,23 @@ def test_check_work_distinguishes_narrowing_from_equivalence() -> None:
     assert body["chain_preserves_solution_set"] is False
 
 
+def test_check_work_flags_partial_overlap_as_provably_invalid() -> None:
+    # {1,2} -> {2,3}: shares "2" but loses "1" while gaining "3" — this
+    # is not a legitimate branch or extension, so it must be reported as
+    # the first provably invalid step, not merely "incomplete".
+    response = client.post(
+        "/api/v1/check-work",
+        json={"equation": "(x-1)*(x-2) = 0", "steps": ["(x-2)*(x-3) = 0"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "invalid_step_found"
+    assert body["steps"][0]["transition"] == "partial_overlap"
+    assert body["first_invalid_step_index"] == 1
+    assert body["chain_preserves_solution_set"] is False
+
+
 def test_check_work_distinguishes_broadening() -> None:
     response = client.post("/api/v1/check-work", json={"equation": "x = 1", "steps": ["x^2 = 1"]})
 

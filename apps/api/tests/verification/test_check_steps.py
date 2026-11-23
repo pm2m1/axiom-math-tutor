@@ -134,11 +134,36 @@ class TestNonEquivalentTransformations:
         outcome = _run("3*x=3*x+1", ["0=1"])
         assert outcome.steps[0].transition == "unsupported"
 
-    def test_overlapping_non_equivalent_sets(self) -> None:
+    def test_overlapping_non_equivalent_sets_is_provably_invalid(self) -> None:
+        # {1,2} -> {2,3}: loses a genuine solution (1) while introducing an
+        # unverified one (3) — not a legitimate branch (pure narrowing
+        # never adds) or extension (pure broadening never drops), so this
+        # must be flagged as the first provably invalid step, not merely
+        # "incomplete" alongside narrowing/broadening.
         outcome = _run("(x-1)*(x-2)=0", ["(x-2)*(x-3)=0"])
         assert outcome.steps[0].transition == "partial_overlap"
-        assert outcome.status == "valid_but_incomplete"
-        assert outcome.first_invalid_step_index is None
+        assert outcome.status == "invalid_step_found"
+        assert outcome.first_invalid_step_index == 1
+        assert outcome.first_non_equivalent_step_index == 1
+        assert outcome.chain_preserves_solution_set is False
+
+    def test_partial_overlap_after_valid_steps_is_the_first_error(self) -> None:
+        outcome = _run(
+            "(x-1)*(x-2)=0",
+            ["(x-1)*(x-2)=0", "(x-2)*(x-3)=0", "x=3"],
+        )
+        assert outcome.first_invalid_step_index == 2
+        assert outcome.steps[0].transition == "equivalent"
+        assert outcome.steps[1].transition == "partial_overlap"
+
+    def test_later_equivalent_step_does_not_clear_an_earlier_partial_overlap(self) -> None:
+        outcome = _run(
+            "(x-1)*(x-2)=0",
+            ["(x-2)*(x-3)=0", "(x-2)*(x-3)=0"],
+        )
+        assert outcome.first_invalid_step_index == 1
+        assert outcome.status == "invalid_step_found"
+        assert outcome.steps[1].transition == "equivalent"
 
 
 class TestFinalAnswer:
@@ -217,6 +242,32 @@ class TestSecurityAndLimits:
         assert "continuity" in outcome.steps[1].detail
         assert outcome.status == "verification_incomplete"
         assert outcome.chain_preserves_solution_set is None
+
+    def test_a_later_clean_comparison_does_not_certify_the_whole_derivation(self) -> None:
+        # Step 1 breaks continuity; step 2 recovers (itself unsupported,
+        # since it can't be compared to anything); step 3 compares
+        # cleanly against step 2's own solution set and is "equivalent".
+        # That local cleanliness must not retroactively certify the full
+        # chain back to the original equation.
+        outcome = _run("2*x=8", ["x + y = 1", "x=4", "x=4"])
+        assert outcome.steps[0].transition == "unsupported"
+        assert outcome.steps[1].transition == "unsupported"
+        assert outcome.steps[2].transition == "equivalent"
+        assert outcome.status == "verification_incomplete"
+        assert outcome.chain_preserves_solution_set is None
+        assert outcome.first_non_equivalent_step_index is None
+
+    def test_an_earlier_invalid_step_is_not_cleared_by_later_steps(self) -> None:
+        outcome = _run("2*x+3=11", ["x=5", "x + y = 1", "x=5"])
+        assert outcome.steps[0].transition == "incompatible"
+        assert outcome.first_invalid_step_index == 1
+        assert outcome.status == "invalid_step_found"
+        # Later continuity loss and a "locally fine" recovery step must
+        # not change the status, the index, or the chain verdict already
+        # established by the earlier provable error.
+        assert outcome.steps[1].transition == "unsupported"
+        assert outcome.steps[2].transition == "unsupported"
+        assert outcome.chain_preserves_solution_set is False
 
     def test_undecidable_symbolic_comparison_is_indeterminate(self, monkeypatch) -> None:
         condition_set = sympy.ConditionSet(X, sympy.Eq(sympy.cos(X), X), sympy.S.Reals)

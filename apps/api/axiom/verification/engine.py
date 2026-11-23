@@ -405,8 +405,9 @@ _TRANSITION_DETAIL: dict[TransitionKind, str] = {
         "answer must still be checked against the original equation"
     ),
     "partial_overlap": (
-        "this step drops at least one previously valid solution and introduces "
-        "at least one new one; it does not preserve the solution set"
+        "this step drops at least one previously valid solution while introducing "
+        "a different, unverified one — not a legitimate branch or extension, so "
+        "this is reported as a provably incorrect transition"
     ),
     "incompatible": "this step changes the solution set incompatibly with the previous equation",
 }
@@ -414,9 +415,8 @@ _TRANSITION_DETAIL: dict[TransitionKind, str] = {
 _STATUS_DETAIL: dict[StepCheckStatus, str] = {
     "all_steps_equivalent": "every step preserves the original real solution set exactly",
     "valid_but_incomplete": (
-        "no provably incorrect step was found, but at least one step changed the "
-        "solution set (narrowing, broadening, or partial overlap) instead of "
-        "preserving it exactly"
+        "no provably incorrect step was found, but at least one step narrowed or "
+        "broadened the solution set instead of preserving it exactly"
     ),
     "invalid_step_found": "a provably incorrect step was found",
     "unsupported": "the original equation is outside the supported verification grammar",
@@ -461,12 +461,18 @@ def classify_transition(old_set: sympy.Set, new_set: sympy.Set) -> TransitionKin
       solution survives, but new ones appeared that still need
       independent checking against the original equation).
     - disjoint (including `new_set` empty while `old_set` isn't) →
-      `"incompatible"` — nothing of the previous solution set survived,
-      which is the one case this function reports as provably wrong.
+      `"incompatible"` — nothing of the previous solution set survived.
     - otherwise, a genuine partial overlap (shares some elements, proper
-      subset of neither) → `"partial_overlap"`: this both drops a valid
-      solution and introduces an unverified one, so it cannot be treated
-      as a safe branch choice the way pure narrowing can.
+      subset of neither) → `"partial_overlap"`: this drops at least one
+      previously valid solution *and* introduces a different, unverified
+      one. Losing a genuine solution is never something a legitimate
+      algebraic operation does without a clean subset relationship (pure
+      narrowing never adds anything; pure broadening never drops
+      anything) — so this is, like `"incompatible"`, reported by
+      `check_steps()` as a provably wrong transition, not merely an
+      incomplete-but-possibly-legitimate one. The distinct label is kept
+      only because the diagnostic (both lost *and* gained) is more
+      specific than plain disjointness.
     """
     if old_set == new_set:
         return "equivalent"
@@ -595,7 +601,12 @@ def check_steps(
 
         if transition != "equivalent" and first_non_equivalent is None:
             first_non_equivalent = index
-        if transition == "incompatible" and first_invalid is None:
+        # "incompatible" and "partial_overlap" both lose at least one
+        # genuine solution without a legitimate subset relationship —
+        # that loss is provably wrong regardless of what else the step
+        # also introduced, so both set first_invalid (unlike pure
+        # "narrowing"/"broadening", which never lose without cause).
+        if transition in ("incompatible", "partial_overlap") and first_invalid is None:
             first_invalid = index
 
     if first_invalid is not None:

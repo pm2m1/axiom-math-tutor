@@ -412,11 +412,11 @@
 }
 
 .check-work-step-result-narrowing,
-.check-work-step-result-broadening,
-.check-work-step-result-partial_overlap {
+.check-work-step-result-broadening {
   border-color: var(--color-warn);
 }
 
+.check-work-step-result-partial_overlap,
 .check-work-step-result-incompatible,
 .check-work-step-result-invalid {
   border-color: var(--color-warn);
