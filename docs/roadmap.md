@@ -192,20 +192,43 @@ The minimum scope required by the originating assignment.
       `app.dependency_overrides` — no network, no API keys required for
       normal `pytest`
 
+**Phase 1K — guarded agentic answer workflow (done):**
+
+- [x] LangGraph `StateGraph` (`axiom/workflow.py`, typed `WorkflowState`)
+      with seven nodes — validate_input, retrieve_evidence, judge_evidence,
+      fetch_web_fallback, generate_answer, validate_output,
+      finalize_response — every routing decision a plain Python
+      conditional, no autonomous tool choice, no loops; reuses Phase 1J's
+      retrieval/judge/search pipeline unchanged
+- [x] Deterministic input guardrail (`axiom/guardrails.py`) rejecting
+      off-topic and prompt-injection requests before any retrieval/judge/
+      search/generation call — not model-based, by design (see
+      `docs/agentic-workflow.md` for the tradeoff)
+- [x] Evidence-grounded answer generation (`MetaAnswerGenerator`, same
+      Meta endpoint as the Phase 1I judge, separate frozen prompt/schema)
+      and output validation (citation checks, no claimed formal
+      verification) as two distinct nodes/concerns
+- [x] New additive `POST /api/v1/answer`; `POST /api/v1/question`
+      (Phase 1J) unchanged
+- [x] Offline tests across guardrail/generation/full-graph/route layers
+      (see `docs/agentic-workflow.md` for counts) — no network, no API
+      keys required for normal `pytest`
+- [x] Live verification: one real KB-supported answer (0 Tavily calls),
+      one real web-fallback answer (exactly 1 Tavily call, 3 real
+      citations), one real off-topic refusal (0 Tavily calls) — all
+      passed first attempt; see `docs/agentic-workflow.md`'s "Live
+      verification" section
+
 **Still open for Phase 1:**
 
-- [ ] Input/output guardrails (reject non-math input, refuse to leak system
-      prompts, basic prompt-injection resistance)
 - [ ] Diagnosing why Qdrant BM25 regresses the hybrid despite comparable
       standalone lexical metrics, before trying a different BM25
       configuration or reranking
 - [ ] Optionally running the historical v1/v2 sets against the LLM judge
       for additional context — deferred in Phase 1I to conserve quota,
       not required for the v3 decision
-- [ ] Wiring `POST /api/v1/question` into the frontend (currently
-      backend-only, no UI calls it yet)
-- [ ] LangGraph workflow tying analyzer → retrieval → routing → response
-      together with explicit typed state
+- [ ] Wiring `POST /api/v1/question`/`POST /api/v1/answer` into the
+      frontend (currently backend-only, no UI calls either)
 - [ ] Human-in-the-loop feedback capture (thumbs up/down or equivalent,
       persisted, not fed back into the system automatically)
 

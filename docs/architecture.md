@@ -10,19 +10,27 @@ description below is.
 
 ```text
 Browser (React) --> FastAPI --> GET /health, GET /api/v1/status
-                              -> POST /api/v1/question
+                              -> POST /api/v1/question (Phase 1J, routing only)
                                    -> hybrid retrieval (BM25 + Qdrant dense + RRF)
                                    -> Meta evidence judge (muse-spark-1.3)
                                    -> sufficient: cited KB chunks
                                       insufficient: one Tavily MCP web search
+                              -> POST /api/v1/answer (Phase 1K, LangGraph workflow)
+                                   -> input guardrail (off-topic / injection rejection)
+                                   -> same retrieval + judge + web fallback as above
+                                   -> Meta answer generation, evidence-only, cited
+                                   -> output validation (citations, no false
+                                      verification claims)
 ```
 
 The frontend renders a static shell (mode selector, question form) with no
-backend call wired to it beyond the status check — `POST /api/v1/question`
-(Phase 1J, see `docs/evidence-routing.md`) exists and is tested, but the
-frontend doesn't call it yet. The backend has no persistence and no
-answer-generation LLM call; `/api/v1/question` only routes a question to
-cited KB evidence or web search results, it does not answer the question.
+backend call wired to it beyond the status check — neither `/api/v1/question`
+(Phase 1J, see `docs/evidence-routing.md`) nor `/api/v1/answer` (Phase 1K,
+see `docs/agentic-workflow.md`) is called from the frontend yet, though both
+exist and are tested. The backend has persistence for nothing beyond Qdrant's
+vector store; `/api/v1/answer` is the first path that actually generates an
+explanation, but it is grounded generation, not formally verified
+mathematics — SymPy verification remains Phase 2, not implemented.
 
 ## Target
 
@@ -129,40 +137,18 @@ deterministic check doesn't apply.
 
 ## State
 
-Agent state must be explicit and typed, not implicit in prompt history. A
-LangGraph-style workflow will carry a state object roughly of the shape:
+Agent state must be explicit and typed, not implicit in prompt history.
+This is no longer just a sketch: `axiom/workflow.py::WorkflowState`
+(Phase 1K — see `docs/agentic-workflow.md`) is a real `TypedDict` driving
+a real LangGraph `StateGraph`, carrying guardrail classification,
+retrieval hits, judge verdict, routing decision, the evidence actually
+handed to generation, and the generated/validated answer, as named
+fields — every value a later node depends on is explicit, never
+re-derived from accumulated prompt history. Fields not yet needed
+(student mastery, misconception, hint level — Phase 3) aren't speculated
+into the state ahead of the phase that would use them.
 
-```python
-class TutorState(TypedDict):
-    question: str
-    student_attempt: str | None
-
-    topic: str | None
-    skill: str | None
-    difficulty: float | None
-
-    retrieved_context: list[RetrievedChunk]
-    retrieval_confidence: float | None
-
-    candidate_solution: str | None
-    verified: bool | None
-
-    misconception: str | None
-    misconception_confidence: float | None
-
-    mastery: float | None
-    hint_level: int
-
-    feedback: dict | None
-```
-
-This is a sketch, not a commitment to the exact fields — it will be refined
-once retrieval and verification are actually implemented in Phase 1/2. The
-commitment is to the principle: every value the workflow depends on should be
-a named, typed field, not something re-derived by re-prompting an LLM with
-accumulated chat history.
-
-## Retrieval architecture (planned)
+## Retrieval architecture
 
 Knowledge-base-first retrieval against a vector store (Qdrant), with a web
 search / MCP fallback used only when KB retrieval confidence is below
@@ -174,13 +160,14 @@ no benefit on the common case.
 Qdrant now persists the dense retriever's vectors, either embedded locally
 or via a real server (`compose.yaml`, Phase 1D/1E — see
 `docs/retrieval-evaluation.md`). The KB-first-then-web ordering above is
-now implemented as `POST /api/v1/question` (Phase 1J — see
-`docs/evidence-routing.md`): the LLM evidence judge (Phase 1I) replaces
-the "confidence threshold" sketched here, and web fallback is a single
-Tavily MCP search, not yet the richer MCP/Routing Engine box in the
-target diagram below. This is evidence routing only — no answer
-generation, no guardrails, no student model, no feedback loop, and the
-frontend doesn't call it yet.
+implemented twice, deliberately sharing the same underlying pipeline: as
+routing-only `POST /api/v1/question` (Phase 1J — see
+`docs/evidence-routing.md`) and as the first stage of the full
+`POST /api/v1/answer` LangGraph workflow (Phase 1K — see
+`docs/agentic-workflow.md`), which adds an input guardrail and
+evidence-grounded answer generation on top of the identical retrieval →
+judge → fallback sequence. Neither call path reranks or reconfigures
+retrieval itself. The frontend doesn't call either endpoint yet.
 
 ## Human feedback philosophy
 

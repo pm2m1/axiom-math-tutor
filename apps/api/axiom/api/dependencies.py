@@ -8,7 +8,9 @@ credentials, an unindexed collection) are caught here and surfaced as
 
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 
+from axiom.retrieval.answer_generation import AnswerGenerator, MetaAnswerGenerator
 from axiom.retrieval.base import Retriever
 from axiom.retrieval.bm25 import BM25Retriever
 from axiom.retrieval.dense import SentenceTransformerEmbedder
@@ -17,6 +19,11 @@ from axiom.retrieval.evidence_judge import JudgeClient, MetaCredentialError, Met
 from axiom.retrieval.hybrid import HybridRetriever
 from axiom.retrieval.qdrant_store import QdrantDenseRetriever, create_client
 from axiom.web_search import TavilyMCPSearchClient, WebSearchClient
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
+
+    from axiom.workflow import WorkflowState
 
 
 @dataclass
@@ -51,3 +58,24 @@ def get_web_search_client() -> WebSearchClient | None:
         return TavilyMCPSearchClient()
     except ValueError:
         return None
+
+
+@lru_cache
+def get_answer_generator() -> AnswerGenerator | None:
+    try:
+        return MetaAnswerGenerator()
+    except MetaCredentialError:
+        return None
+
+
+@lru_cache
+def get_workflow() -> "CompiledStateGraph[WorkflowState, Any, Any, Any]":
+    from axiom.workflow import build_workflow
+
+    pipeline = get_retrieval_pipeline()
+    return build_workflow(
+        pipeline.hybrid if pipeline else None,
+        get_evidence_judge(),
+        get_web_search_client(),
+        get_answer_generator(),
+    )

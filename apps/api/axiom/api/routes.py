@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING, Any, cast
+
 from fastapi import APIRouter, Depends
 
 from axiom.api.dependencies import (
@@ -5,8 +7,10 @@ from axiom.api.dependencies import (
     get_evidence_judge,
     get_retrieval_pipeline,
     get_web_search_client,
+    get_workflow,
 )
 from axiom.core.config import get_settings
+from axiom.models.answer import AnswerResponse
 from axiom.models.evidence_routing import (
     EvidenceRoutingResponse,
     KBSource,
@@ -16,6 +20,10 @@ from axiom.models.evidence_routing import WebSource as WebSourceModel
 from axiom.models.status import HealthResponse, StatusResponse
 from axiom.retrieval.evidence_judge import JudgeClient
 from axiom.web_search import WebSearchClient
+from axiom.workflow import WorkflowState, initial_state, response_from_state
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
 
 router = APIRouter()
 
@@ -104,3 +112,18 @@ def answer_question(
     ]
     detail = None if web_sources else "no web search results found"
     return EvidenceRoutingResponse(route="web_search", web_sources=web_sources, detail=detail)
+
+
+@router.post("/api/v1/answer", response_model=AnswerResponse)
+def answer_with_generation(
+    request: QuestionRequest,
+    workflow: "CompiledStateGraph[WorkflowState, Any, Any, Any]" = Depends(get_workflow),
+) -> AnswerResponse:
+    """Guarded, evidence-grounded answer generation (Phase 1K) — the
+    LangGraph workflow in `axiom/workflow.py`: input guardrail, the
+    unchanged Phase 1J retrieval/judge/search pipeline, then Meta answer
+    generation and output validation. See docs/agentic-workflow.md.
+    Additive to `/api/v1/question`, which is unchanged and still routes
+    without generating an answer."""
+    raw_result = workflow.invoke(initial_state(request.question))
+    return response_from_state(cast(WorkflowState, raw_result))
