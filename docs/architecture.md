@@ -21,15 +21,22 @@ Browser (React) --> FastAPI --> GET /health, GET /api/v1/status
                                    -> Meta answer generation, evidence-only, cited
                                    -> output validation (citations, no false
                                       verification claims)
+                                   -> server-issued answer_id (Phase 1L)
+                              -> POST /api/v1/feedback (Phase 1L)
+                                   -> SQLite, write-only from the system's view
 ```
 
-The frontend renders a static shell (mode selector, question form) with no
-backend call wired to it beyond the status check — neither `/api/v1/question`
-(Phase 1J, see `docs/evidence-routing.md`) nor `/api/v1/answer` (Phase 1K,
-see `docs/agentic-workflow.md`) is called from the frontend yet, though both
-exist and are tested. The backend has persistence for nothing beyond Qdrant's
-vector store; `/api/v1/answer` is the first path that actually generates an
-explanation, but it is grounded generation, not formally verified
+The React frontend (Tutor mode) now calls `/api/v1/answer` for real and
+renders its `kb`/`web`/`refused`/`abstained`/`unavailable` outcomes
+distinctly, with citations and a thumbs up/down + optional-correction
+feedback control posting to `/api/v1/feedback` (Phase 1L — see
+`docs/feedback.md`). Check My Work and Practice are shown disabled with
+an honest "not available yet" note rather than silently routed to the
+same endpoint — they need Phase 2/3 work that doesn't exist.
+`/api/v1/question` (Phase 1J, see `docs/evidence-routing.md`) still has
+no frontend caller; it exists for routing-only use. The backend's only
+persistence is Qdrant's vector store and the new feedback SQLite file;
+`/api/v1/answer` is grounded generation, not formally verified
 mathematics — SymPy verification remains Phase 2, not implemented.
 
 ## Target
@@ -172,9 +179,12 @@ retrieval itself. The frontend doesn't call either endpoint yet.
 ## Human feedback philosophy
 
 Human-in-the-loop feedback (student "was this helpful", teacher review of
-flagged sessions) is planned as an input to evaluation and future prompt/
-retrieval tuning, not as a mechanism for the system to silently retrain
-itself. Two reasons:
+flagged sessions) is captured (Phase 1L — thumbs up/down and an optional
+correction, persisted to SQLite, see `docs/feedback.md`) as an input to
+future evaluation and prompt/retrieval tuning, not as a mechanism for the
+system to silently retrain itself: nothing reads the feedback table back
+into retrieval, the judge, generation, or any model parameter. Two
+reasons the capture/use split is deliberate, not just not-built-yet:
 
 1. **Unsupervised self-modification from feedback signal is unsafe for a
    tutoring product.** A thumbs-down on a hint that was correct but blunt,

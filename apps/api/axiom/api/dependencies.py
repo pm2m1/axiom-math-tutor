@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
+from axiom.feedback import FeedbackStore
 from axiom.retrieval.answer_generation import AnswerGenerator, MetaAnswerGenerator
 from axiom.retrieval.base import Retriever
 from axiom.retrieval.bm25 import BM25Retriever
@@ -66,6 +67,11 @@ def get_answer_generator() -> AnswerGenerator | None:
         return MetaAnswerGenerator()
     except MetaCredentialError:
         return None
+
+
+@lru_cache
+def get_feedback_store() -> FeedbackStore:
+    return FeedbackStore()
 
 
 @lru_cache

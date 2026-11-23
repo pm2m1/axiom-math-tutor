@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
+import { API_BASE } from '../api/client'
 
 type ApiState = 'checking' | 'online' | 'offline'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 const POLL_INTERVAL_MS = 15_000
 
 const LABEL: Record<ApiState, string> = {

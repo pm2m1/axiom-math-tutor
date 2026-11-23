@@ -36,18 +36,23 @@ split and how it's expected to evolve.
 
 ## Status
 
-This repository currently contains a project skeleton, an initial algebra
-knowledge base, and a measured comparison of lexical (BM25), dense, hybrid,
-and Qdrant-backed retrieval baselines. No LLM calls, verification, or
-student modeling exist yet, and Qdrant is not wired into any request path —
-it's an evaluation-time persistence layer, not production infrastructure.
+Phase 1 (assignment-complete agentic RAG) is done: an algebra knowledge
+base with measured BM25/dense/hybrid/Qdrant retrieval baselines, a Meta
+LLM evidence-sufficiency judge, a Tavily web-search fallback, a LangGraph
+workflow with an input guardrail and evidence-grounded answer generation,
+a React frontend that calls it for real, and persisted human feedback.
+None of this is verified mathematics or adaptive tutoring — see the table
+below and `docs/roadmap.md`'s Phase 1 acceptance checklist.
 
 | Area | Status |
 | --- | --- |
-| Backend skeleton (FastAPI, health/status) | Implemented |
-| Frontend skeleton (mode selector, question form) | Implemented |
+| Backend (FastAPI), frontend (React/Vite) skeletons | Implemented |
 | Algebra knowledge base, chunking, BM25/dense/hybrid/Qdrant retrieval baselines | Implemented |
-| Guardrails, KB-first routing, web fallback, LangGraph, HITL | Planned |
+| Guardrails, KB-first routing, web fallback | Implemented |
+| LangGraph agentic workflow, evidence-grounded answer generation | Implemented |
+| React frontend wired to `/api/v1/answer`; Tutor mode only | Implemented |
+| Human feedback (thumbs up/down, optional correction, SQLite) | Implemented |
+| Check My Work, Practice modes | Planned (Phase 2/3) |
 | SymPy-based verification, confidence/abstention | Planned |
 | Student model, misconception diagnosis, hint ladder | Planned |
 | JEEBench / MathTutorBench evaluation | Planned |
@@ -73,6 +78,10 @@ axiom-math-tutor/
     ├── architecture.md
     ├── roadmap.md
     ├── retrieval-evaluation.md
+    ├── kb-sufficiency.md
+    ├── evidence-routing.md
+    ├── agentic-workflow.md
+    ├── feedback.md
     └── decisions/    Architecture decision records
 ```
 
@@ -89,7 +98,9 @@ uv run uvicorn axiom.main:app --reload
 ```
 
 The API serves `GET /health` and `GET /api/v1/status` on
-`http://localhost:8000`.
+`http://localhost:8000`, plus `POST /api/v1/question`, `POST /api/v1/answer`,
+and `POST /api/v1/feedback` — see `docs/evidence-routing.md`,
+`docs/agentic-workflow.md`, and `docs/feedback.md`.
 
 ### Frontend
 
@@ -101,12 +112,44 @@ npm run dev
 
 The dev server runs on `http://localhost:5173` and expects the API at
 `http://localhost:8000` (override with `VITE_API_BASE_URL`). A small status
-indicator in the top bar shows whether it can reach the API.
+indicator in the top bar shows whether it can reach the API. Tutor mode
+calls `/api/v1/answer` for real; Check My Work and Practice are shown
+disabled with a note explaining they need Phase 2/3 work that doesn't
+exist yet.
 
 ### Environment variables
 
-Copy `.env.example` to `.env` in `apps/api` if you want to override defaults.
-Nothing is required to run the current skeleton.
+Copy `.env.example` to `.env` in `apps/api` if you want to override
+defaults. Nothing is required to start either app or to exercise the
+input guardrail and refusal paths. To get real `"kb"`/`"web"` answers
+instead of `"unavailable"` responses, set these (see `.env.example` for
+what each one is for — never commit real values):
+
+- `MODEL_API_KEY` (and optionally `MODEL_API_BASE_URL`) — Meta's Model
+  API, used by both the evidence judge and answer generation
+- `TAVILY_API_KEY` — Tavily's hosted MCP server, used only when KB
+  evidence is judged insufficient
+
+Both are read directly from the process environment (not loaded from
+`.env` automatically), so export them in the shell that starts
+`uvicorn`. `AXIOM_FEEDBACK_DB_PATH` optionally overrides where the
+feedback SQLite file is written (default: `.data/feedback.sqlite3` at
+the repo root).
+
+### Inspecting the feedback database
+
+```bash
+sqlite3 .data/feedback.sqlite3 "select * from feedback;"
+```
+
+or, without the `sqlite3` CLI:
+
+```bash
+cd apps/api
+uv run python -c "import sqlite3; c = sqlite3.connect('../../.data/feedback.sqlite3'); print(c.execute('select * from feedback').fetchall())"
+```
+
+See `docs/feedback.md` for the schema.
 
 ### Knowledge base and retrieval baseline
 
@@ -147,16 +190,16 @@ uv run mypy axiom
 cd apps/web
 npm run build   # tsc --build && vite build
 npm run lint
+npm run test    # vitest, offline — mocks the API client, no real backend calls
 ```
 
 ## Roadmap (high level)
 
 - **Phase 0 — Foundation**: repository, tooling, backend/frontend skeleton.
-- **Phase 1 — Assignment-complete agentic RAG**: guardrails, knowledge base,
-  vector retrieval, web-search fallback, LangGraph workflow, human-in-the-loop
-  feedback. *(knowledge base, retrieval baselines, and Qdrant-backed
-  persistence exist; this is where the project is today — see
-  `docs/roadmap.md` for the rest of the phase)*
+- **Phase 1 — Assignment-complete agentic RAG** *(done)*: guardrails,
+  knowledge base, vector retrieval, web-search fallback, LangGraph
+  workflow, a real frontend integration, and persisted human-in-the-loop
+  feedback — see `docs/roadmap.md` for the full acceptance checklist.
 - **Phase 2 — Verified mathematical reasoning**: problem routing, SymPy
   verification, confidence/abstention, reasoning traces.
 - **Phase 3 — Adaptive tutoring**: student model, misconception diagnosis,

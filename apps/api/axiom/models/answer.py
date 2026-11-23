@@ -36,10 +36,17 @@ class AnswerResponse(BaseModel):
       string — never a raw provider error, stack trace, or credential.
 
     `answer` is non-null only for `"kb"`/`"web"`. This is an explanation,
-    not a formally verified derivation — see docs/agentic-workflow.md."""
+    not a formally verified derivation — see docs/agentic-workflow.md.
+
+    `answer_id` (Phase 1L) is a server-issued identifier, set only for
+    `"kb"`/`"web"` — feedback can only be attached to a request that
+    actually produced an answer. It is assigned by the route handler
+    after the workflow runs, not part of `WorkflowState` — recording it
+    is bookkeeping for feedback attribution, not a workflow decision."""
 
     status: Literal["kb", "web", "refused", "abstained", "unavailable"]
     answer: str | None = None
     citations: list[Citation] = []
     reason: AnswerReason | None = None
     detail: str | None = None
+    answer_id: str | None = None

@@ -1,15 +1,17 @@
 from typing import TYPE_CHECKING, Any, cast
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from axiom.api.dependencies import (
     RetrievalPipeline,
     get_evidence_judge,
+    get_feedback_store,
     get_retrieval_pipeline,
     get_web_search_client,
     get_workflow,
 )
 from axiom.core.config import get_settings
+from axiom.feedback import FeedbackStore, UnknownAnswerError
 from axiom.models.answer import AnswerResponse
 from axiom.models.evidence_routing import (
     EvidenceRoutingResponse,
@@ -17,6 +19,7 @@ from axiom.models.evidence_routing import (
     QuestionRequest,
 )
 from axiom.models.evidence_routing import WebSource as WebSourceModel
+from axiom.models.feedback import FeedbackRequest, FeedbackResponse
 from axiom.models.status import HealthResponse, StatusResponse
 from axiom.retrieval.evidence_judge import JudgeClient
 from axiom.web_search import WebSearchClient
@@ -118,12 +121,42 @@ def answer_question(
 def answer_with_generation(
     request: QuestionRequest,
     workflow: "CompiledStateGraph[WorkflowState, Any, Any, Any]" = Depends(get_workflow),
+    feedback_store: FeedbackStore = Depends(get_feedback_store),
 ) -> AnswerResponse:
     """Guarded, evidence-grounded answer generation (Phase 1K) — the
     LangGraph workflow in `axiom/workflow.py`: input guardrail, the
     unchanged Phase 1J retrieval/judge/search pipeline, then Meta answer
     generation and output validation. See docs/agentic-workflow.md.
     Additive to `/api/v1/question`, which is unchanged and still routes
-    without generating an answer."""
+    without generating an answer.
+
+    `answer_id` (Phase 1L) is assigned here, outside the graph, only for
+    an actual answer (`kb`/`web`) — feedback can only attach to a request
+    that produced one. See docs/feedback.md."""
     raw_result = workflow.invoke(initial_state(request.question))
-    return response_from_state(cast(WorkflowState, raw_result))
+    response = response_from_state(cast(WorkflowState, raw_result))
+    if response.status in ("kb", "web"):
+        response.answer_id = feedback_store.record_answer(response.status)
+    return response
+
+
+@router.post("/api/v1/feedback", response_model=FeedbackResponse)
+def submit_feedback(
+    request: FeedbackRequest, feedback_store: FeedbackStore = Depends(get_feedback_store)
+) -> FeedbackResponse:
+    """Persisted for later human review only (Phase 1L) — never read back
+    into retrieval, the judge, or generation. See docs/feedback.md."""
+    try:
+        record = feedback_store.submit_feedback(
+            request.answer_id, request.rating, request.correction
+        )
+    except UnknownAnswerError as exc:
+        raise HTTPException(status_code=404, detail="unknown answer_id") from exc
+    return FeedbackResponse(
+        feedback_id=record.feedback_id,
+        answer_id=record.answer_id,
+        rating=record.rating,
+        correction=record.correction,
+        answer_status=record.answer_status,
+        created_at=record.created_at,
+    )

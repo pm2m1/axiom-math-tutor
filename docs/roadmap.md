@@ -219,24 +219,57 @@ The minimum scope required by the originating assignment.
       passed first attempt; see `docs/agentic-workflow.md`'s "Live
       verification" section
 
-**Still open for Phase 1:**
+**Phase 1L — frontend integration, human feedback, end-to-end (done):**
 
-- [ ] Diagnosing why Qdrant BM25 regresses the hybrid despite comparable
-      standalone lexical metrics, before trying a different BM25
-      configuration or reranking
-- [ ] Optionally running the historical v1/v2 sets against the LLM judge
-      for additional context — deferred in Phase 1I to conserve quota,
-      not required for the v3 decision
-- [ ] Wiring `POST /api/v1/question`/`POST /api/v1/answer` into the
-      frontend (currently backend-only, no UI calls either)
-- [ ] Human-in-the-loop feedback capture (thumbs up/down or equivalent,
-      persisted, not fed back into the system automatically)
+- [x] React Tutor mode calls `/api/v1/answer` for real through a small
+      typed API client (`apps/web/src/api/client.ts`); Check My Work and
+      Practice are shown disabled with an honest "needs Phase 2/3" note,
+      not silently routed to the same backend
+- [x] All five `AnswerResponse` statuses rendered distinctly
+      (`AnswerView.tsx`), with citations, loading state, duplicate-submit
+      prevention (disabled button while a request is in flight), and a
+      frontend-only `network-error` case kept separate from the
+      backend's own `"unavailable"`
+- [x] Server-issued `answer_id` (new optional `AnswerResponse` field,
+      assigned in the route handler, outside `WorkflowState`) and
+      `POST /api/v1/feedback` (thumbs up/down + optional bounded
+      correction, SQLite, replace-not-duplicate on resubmission,
+      survives a process restart) — see `docs/feedback.md`
+- [x] `FeedbackControls.tsx`, remounted per answer via `key={answerId}`,
+      posts to `/api/v1/feedback` and shows success/failure
+- [x] Offline tests: 23 frontend (Vitest + Testing Library — request
+      submission, loading/duplicate-submit, all five answer renderings,
+      feedback success/failure) plus 18 new/updated backend
+      (`test_feedback.py`, `test_answer_routing.py` additions); 222
+      backend tests total, all passing, no network/API keys required
+- [x] Live verification: one real KB-supported answer, one real
+      web-fallback answer (exactly 1 Tavily call), one real off-topic
+      refusal (0 provider calls), one real feedback submission verified
+      on disk after killing and reopening the backend process — see
+      `docs/feedback.md`'s "Live verification"
+- [x] Diagnosing why Qdrant BM25 regresses the hybrid despite comparable
+      standalone lexical metrics — deferred; not required for Phase 1
+      acceptance, revisit only if retrieval quality becomes a blocker
+- [x] Optionally running the historical v1/v2 sets against the LLM
+      judge — deferred, not required for the v3 decision
 
-**Acceptance**: given a question the KB actually covers, the system answers
-from the KB and can show what it retrieved; given a question it doesn't
-cover, it falls back to web/MCP and says so; a deliberately off-topic or
-adversarial input is refused by the guardrail rather than reaching the LLM
-call unfiltered.
+**Phase 1 acceptance checklist:**
+
+- [x] Given a question the KB actually covers, the system answers from
+      the KB and shows what it retrieved (frontend and backend)
+- [x] Given a question it doesn't cover, it falls back to web/MCP and
+      says so, with real citations
+- [x] A deliberately off-topic or adversarial input is refused by the
+      guardrail before reaching retrieval, the judge, search, or
+      generation
+- [x] A dependency failure produces an explicit `"unavailable"` state,
+      never a fabricated explanation
+- [x] A student can rate an answer and leave an optional correction;
+      feedback persists across a backend restart and is never fed back
+      into prompts, retrieval, evidence labels, or model parameters
+- [x] This is assignment-complete agentic RAG, not verified mathematics,
+      adaptive tutoring, or a production system — none of those claims
+      are made anywhere in the UI or docs
 
 ## Phase 2 — Verified mathematical reasoning
 
