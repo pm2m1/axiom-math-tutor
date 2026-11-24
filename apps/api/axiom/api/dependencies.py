@@ -11,6 +11,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from axiom.feedback import FeedbackStore
+from axiom.mastery import MasteryStore
 from axiom.retrieval.answer_generation import AnswerGenerator, MetaAnswerGenerator
 from axiom.retrieval.base import Retriever
 from axiom.retrieval.bm25 import BM25Retriever
@@ -72,6 +73,11 @@ def get_answer_generator() -> AnswerGenerator | None:
 @lru_cache
 def get_feedback_store() -> FeedbackStore:
     return FeedbackStore()
+
+
+@lru_cache
+def get_mastery_store() -> MasteryStore:
+    return MasteryStore()
 
 
 @lru_cache

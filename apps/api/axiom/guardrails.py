@@ -38,14 +38,19 @@ _INJECTION_RE = re.compile("|".join(_INJECTION_PATTERNS), re.IGNORECASE)
 # A generous math-signal vocabulary: this must accept calculus, geometry,
 # statistics, and other math outside the algebra KB (those are legitimate
 # web-fallback candidates, not rejections) — it only needs to reject
-# requests with no mathematical content at all.
+# requests with no mathematical content at all. "differentiate"/
+# "integrate"/"combinatorics" (Phase 3) are the imperative-verb/noun
+# forms the deterministic problem router's own command syntax uses
+# (axiom/problem_router.py) — without them, a command like "differentiate
+# x^2" could be rejected here before the router ever sees it.
 _MATH_WORDS = re.compile(
     r"\b(equation|inequality|solve|simplify|calculate|compute|derivative|"
-    r"integral|algebra|geometry|calculus|trigonometry|theorem|formula|"
-    r"variable|function|graph|slope|polynomial|quadratic|factor|matrix|"
-    r"vector|probability|statistics|proof|sum|product|fraction|exponent|"
-    r"logarithm|root|angle|triangle|circle|area|volume|number|digit|"
-    r"percent|ratio|sequence|series|limit|property|equality|equal|math)\b",
+    r"differentiate|integral|integrate|algebra|geometry|calculus|"
+    r"trigonometry|theorem|formula|variable|function|graph|slope|"
+    r"polynomial|quadratic|factor|matrix|vector|probability|combinatorics|"
+    r"statistics|proof|sum|product|fraction|exponent|logarithm|root|angle|"
+    r"triangle|circle|area|volume|number|digit|percent|ratio|sequence|"
+    r"series|limit|property|equality|equal|math)\b",
     re.IGNORECASE,
 )
 _MATH_SYMBOLS = re.compile(r"[0-9]|[=+\-*/^]")

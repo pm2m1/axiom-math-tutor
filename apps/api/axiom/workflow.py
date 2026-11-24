@@ -13,6 +13,15 @@ State is a single typed `WorkflowState` TypedDict (see docs/architecture.md's
 "Agent state must be explicit and typed" principle, now applied) — every
 value a later node depends on is a named field, never something
 re-derived from accumulated history.
+
+Phase 3 adds one node, `classify_math_problem`, immediately after
+`validate_input`: a deterministic, regex-based check (never an LLM) for
+a small set of explicit computation commands (see
+`axiom/problem_router.py`). A match short-circuits straight to
+`finalize_response` with an exactly-computed answer; anything that
+doesn't match takes the identical `retrieve_evidence` path this graph
+already had — no existing routing decision changes for a question the
+router doesn't recognize.
 """
 
 from dataclasses import dataclass
@@ -23,6 +32,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from axiom.guardrails import classify_input
 from axiom.models.answer import AnswerReason, AnswerResponse, Citation
+from axiom.problem_router import StructuredMathProblem, match_structured_math_problem
 from axiom.retrieval.answer_generation import (
     AnswerGenerator,
     EvidenceItem,
@@ -32,6 +42,13 @@ from axiom.retrieval.answer_generation import (
 from axiom.retrieval.base import Retriever
 from axiom.retrieval.evidence_judge import JudgeClient
 from axiom.retrieval.models import RetrievalResult
+from axiom.verification.engine import (
+    CalculusOutcome,
+    CombinatoricsOutcome,
+    check_combinatorics,
+    compute_derivative,
+    compute_integral,
+)
 from axiom.web_search import WebSearchClient, WebSource
 
 
@@ -40,6 +57,11 @@ class WorkflowState(TypedDict, total=False):
 
     input_status: Literal["accepted", "rejected_off_topic", "rejected_injection"]
     input_detail: str
+
+    structured_match: StructuredMathProblem | None
+    structured_status: Literal["computed", "unsupported"] | None
+    structured_computed: str | None
+    structured_detail: str | None
 
     retrieval_ok: bool
     retrieved_chunk_ids: list[str]
@@ -64,11 +86,13 @@ class WorkflowState(TypedDict, total=False):
     output_status: Literal["valid", "model_abstained", "invalid"]
     output_invalid_reason: str | None
 
-    final_status: Literal["kb", "web", "refused", "abstained", "unavailable"]
+    final_status: Literal["kb", "web", "computed", "refused", "abstained", "unavailable"]
     final_reason: AnswerReason | None
     final_detail: str | None
     final_answer: str | None
     final_citations: list[Citation]
+    final_verification_method: Literal["deterministic_sympy", "evidence_grounded_llm"] | None
+    final_solver_category: Literal["derivative", "integral", "combinatorics"] | None
 
 
 def initial_state(question: str) -> WorkflowState:
@@ -76,6 +100,10 @@ def initial_state(question: str) -> WorkflowState:
         "question": question,
         "input_status": "accepted",
         "input_detail": "",
+        "structured_match": None,
+        "structured_status": None,
+        "structured_computed": None,
+        "structured_detail": None,
         "retrieval_ok": False,
         "retrieved_chunk_ids": [],
         "retrieved_chunk_texts": [],
@@ -98,6 +126,8 @@ def initial_state(question: str) -> WorkflowState:
         "final_detail": None,
         "final_answer": None,
         "final_citations": [],
+        "final_verification_method": None,
+        "final_solver_category": None,
     }
 
 
@@ -108,25 +138,48 @@ def response_from_state(state: WorkflowState) -> AnswerResponse:
         citations=state.get("final_citations") or [],
         reason=state.get("final_reason"),
         detail=state.get("final_detail"),
+        verification_method=state.get("final_verification_method"),
+        solver_category=state.get("final_solver_category"),
     )
 
 
 @dataclass
 class _Final:
-    status: Literal["kb", "web", "refused", "abstained", "unavailable"]
+    status: Literal["kb", "web", "computed", "refused", "abstained", "unavailable"]
     reason: AnswerReason | None = None
     detail: str | None = None
     answer: str | None = None
     citations: list[Citation] | None = None
+    verification_method: Literal["deterministic_sympy", "evidence_grounded_llm"] | None = None
+    solver_category: Literal["derivative", "integral", "combinatorics"] | None = None
 
     def to_update(self) -> dict[str, object]:
         return {
             "final_status": self.status,
             "final_reason": self.reason,
             "final_detail": self.detail,
+            "final_verification_method": self.verification_method,
+            "final_solver_category": self.solver_category,
             "final_answer": self.answer,
             "final_citations": self.citations or [],
         }
+
+
+def _format_structured_answer(match: StructuredMathProblem, computed: str) -> str:
+    """A fixed, hand-written sentence template per problem kind — never
+    LLM-generated wording for a result this engine computed exactly."""
+    if match.kind == "derivative":
+        return (
+            f"The derivative of {match.expression} with respect to {match.variable} is {computed}."
+        )
+    if match.kind == "integral":
+        return (
+            f"An antiderivative of {match.expression} with respect to {match.variable} "
+            f"is {computed} (plus an arbitrary constant)."
+        )
+    if match.kind == "ncr":
+        return f"The number of ways to choose {match.r} items from {match.n} is {computed}."
+    return f"The number of ordered arrangements of {match.r} items from {match.n} is {computed}."
 
 
 def _build_citations(state: WorkflowState) -> list[Citation]:
@@ -183,6 +236,30 @@ def build_workflow(
 
     def route_after_validate(state: WorkflowState) -> str:
         return "accepted" if state["input_status"] == "accepted" else "rejected"
+
+    def classify_math_problem_node(state: WorkflowState) -> dict[str, object]:
+        match = match_structured_math_problem(state["question"])
+        if match is None:
+            return {"structured_match": None}
+
+        outcome: CalculusOutcome | CombinatoricsOutcome
+        if match.kind == "derivative":
+            outcome = compute_derivative(match.expression, match.variable)
+        elif match.kind == "integral":
+            outcome = compute_integral(match.expression, match.variable)
+        else:
+            assert match.n is not None and match.r is not None
+            outcome = check_combinatorics(match.kind, match.n, match.r)
+
+        return {
+            "structured_match": match,
+            "structured_status": outcome.status,
+            "structured_computed": outcome.computed,
+            "structured_detail": outcome.detail,
+        }
+
+    def route_after_classify_math(state: WorkflowState) -> str:
+        return "matched" if state.get("structured_status") == "computed" else "unmatched"
 
     def retrieve_evidence_node(state: WorkflowState) -> dict[str, object]:
         if hybrid_retriever is None:
@@ -299,6 +376,24 @@ def build_workflow(
         if input_status == "rejected_injection":
             return _Final("refused", "prompt_injection", state.get("input_detail")).to_update()
 
+        match = state.get("structured_match")
+        if match is not None and state.get("structured_status") == "computed":
+            computed = state.get("structured_computed")
+            assert computed is not None
+            solver_category: Literal["derivative", "integral", "combinatorics"]
+            if match.kind in ("ncr", "npr"):
+                solver_category = "combinatorics"
+            elif match.kind == "derivative":
+                solver_category = "derivative"
+            else:
+                solver_category = "integral"
+            return _Final(
+                status="computed",
+                answer=_format_structured_answer(match, computed),
+                verification_method="deterministic_sympy",
+                solver_category=solver_category,
+            ).to_update()
+
         if not state.get("retrieval_ok"):
             return _Final(
                 "unavailable", "retrieval_error", "retrieval is not available"
@@ -335,11 +430,15 @@ def build_workflow(
         assert answer is not None
         route = state.get("route", "kb")
         return _Final(
-            status=route, answer=answer.explanation, citations=_build_citations(state)
+            status=route,
+            answer=answer.explanation,
+            citations=_build_citations(state),
+            verification_method="evidence_grounded_llm",
         ).to_update()
 
     builder = StateGraph(WorkflowState)
     builder.add_node("validate_input", validate_input_node)
+    builder.add_node("classify_math_problem", classify_math_problem_node)
     builder.add_node("retrieve_evidence", retrieve_evidence_node)
     builder.add_node("judge_evidence", judge_evidence_node)
     builder.add_node("fetch_web_fallback", fetch_web_fallback_node)
@@ -351,7 +450,12 @@ def build_workflow(
     builder.add_conditional_edges(
         "validate_input",
         route_after_validate,
-        {"accepted": "retrieve_evidence", "rejected": "finalize_response"},
+        {"accepted": "classify_math_problem", "rejected": "finalize_response"},
+    )
+    builder.add_conditional_edges(
+        "classify_math_problem",
+        route_after_classify_math,
+        {"matched": "finalize_response", "unmatched": "retrieve_evidence"},
     )
     builder.add_conditional_edges(
         "retrieve_evidence",

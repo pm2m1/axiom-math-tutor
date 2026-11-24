@@ -1,11 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { askQuestion } from './api/client'
+import { askQuestion, masterySummary } from './api/client'
 
 vi.mock('./api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api/client')>()
-  return { ...actual, askQuestion: vi.fn() }
+  return { ...actual, askQuestion: vi.fn(), masterySummary: vi.fn() }
 })
 
 function deferred<T>() {
@@ -24,6 +24,7 @@ function kbAnswer(text: string) {
 
 afterEach(() => {
   vi.mocked(askQuestion).mockReset()
+  vi.mocked(masterySummary).mockReset()
 })
 
 function ask(question: string) {
@@ -100,13 +101,21 @@ describe('App', () => {
     expect(askQuestion).not.toHaveBeenCalled()
   })
 
-  it('shows an upcoming note and no form for Practice, which is not implemented yet', () => {
+  it('switches to the real Practice form, not the Tutor question box', async () => {
+    vi.mocked(masterySummary).mockResolvedValue({
+      skills: [
+        { skill: 'linear_equations', estimate: 0.5 },
+        { skill: 'quadratic_equations', estimate: 0.5 },
+      ],
+    })
+
     render(<App />)
     fireEvent.click(screen.getByRole('tab', { name: 'Practice' }))
 
     expect(screen.queryByPlaceholderText(/enter an algebra question/i)).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Original equation')).not.toBeInTheDocument()
-    expect(screen.getByText(/not available yet/i)).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Start practicing' })).toBeInTheDocument()
+    expect(askQuestion).not.toHaveBeenCalled()
   })
 
   it('preserves the Tutor-mode answer when switching to another mode and back', async () => {

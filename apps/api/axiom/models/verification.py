@@ -74,17 +74,26 @@ StepCheckStatus = Literal[
 _BoundedEquation = Annotated[str, Field(min_length=1, max_length=200)]
 
 
+MisconceptionLabel = Literal[
+    "lost_solution_branch", "introduced_extraneous_root", "sign_error", "general_error"
+]
+
+
 class CheckWorkRequest(BaseModel):
     """`solutions` distinguishes "no final answer submitted" (omitted,
     the default `None` — `final_answer` in the response is then `None`
     too) from "the student is claiming the equation has no real
     solutions" (an explicit empty list `[]`), the same convention
-    `VerifyRequest` already uses."""
+    `VerifyRequest` already uses. `hint_level`, if given, returns hints
+    for the *original* equation up to and including that level (1–4) —
+    omitted means no hints at all; level 4 (the full solution) is never
+    included unless explicitly requested at that level."""
 
     equation: str = Field(min_length=1, max_length=200)
     variable: str = Field(default="x", min_length=1, max_length=1, pattern=r"^[A-Za-z]$")
     steps: list[_BoundedEquation] = Field(default_factory=list, max_length=15)
     solutions: list[str] | None = Field(default=None, max_length=20)
+    hint_level: int | None = Field(default=None, ge=1, le=4)
 
 
 class StepResult(BaseModel):
@@ -93,6 +102,7 @@ class StepResult(BaseModel):
     category: Category
     transition: TransitionKind
     detail: str
+    misconception: MisconceptionLabel | None = None
 
 
 class CheckWorkResponse(BaseModel):
@@ -134,3 +144,77 @@ class CheckWorkResponse(BaseModel):
     deterministic: bool
     detail: str
     final_answer: VerifyResponse | None = None
+    hints: list[str] | None = None
+
+
+# --- Phase 3: calculus (derivatives / indefinite integrals) ---------------
+
+CalculusStatus = Literal[
+    "computed", "verified_correct", "verified_incorrect", "unsupported", "indeterminate"
+]
+"""`"computed"` is not reachable through `/api/v1/verify-derivative` or
+`/api/v1/verify-integral` (both always pass a proposed answer, so the
+engine always verifies rather than just computes) — it exists on this
+type only so it stays a strict superset of the engine's own
+`CalculusStatus`, which the deterministic problem router's internal use
+of `compute_derivative`/`compute_integral` does produce."""
+
+
+class DerivativeRequest(BaseModel):
+    expression: str = Field(min_length=1, max_length=200)
+    variable: str = Field(default="x", min_length=1, max_length=1, pattern=r"^[A-Za-z]$")
+    proposed_derivative: str = Field(min_length=1, max_length=200)
+
+
+class IntegralRequest(BaseModel):
+    expression: str = Field(min_length=1, max_length=200)
+    variable: str = Field(default="x", min_length=1, max_length=1, pattern=r"^[A-Za-z]$")
+    proposed_antiderivative: str = Field(min_length=1, max_length=200)
+
+
+class CalculusResponse(BaseModel):
+    """`computed` is this engine's own SymPy-derived result, shown for
+    reference only — `status` always reflects an independent exact
+    check of the *proposed* answer (never a textual match against
+    `computed`, since multiple closed forms can be equally correct).
+    `deterministic` is `False` only for `"indeterminate"`."""
+
+    status: CalculusStatus
+    operation: Literal["derivative", "integral"]
+    computed: str | None
+    deterministic: bool
+    reason: str | None = None
+    detail: str
+
+
+# --- Phase 3: combinatorics / probability ----------------------------------
+
+CombinatoricsOperation = Literal["ncr", "npr", "probability"]
+CombinatoricsStatus = Literal[
+    "computed", "verified_correct", "verified_incorrect", "unsupported", "indeterminate"
+]
+MAX_COMBINATORICS_N = 100
+
+
+class CombinatoricsRequest(BaseModel):
+    """`favorable` is required only for `operation="probability"` — the
+    exact probability that an `r`-item selection drawn from `n` items
+    consists entirely of items from a `favorable`-sized subset
+    (`C(favorable, r) / C(n, r)`), the classic "all drawn balls are red"
+    pattern. Not a general probability solver. `proposed_answer` is
+    optional — omitted means "just compute it", not "verify something"."""
+
+    operation: CombinatoricsOperation
+    n: int = Field(ge=0, le=MAX_COMBINATORICS_N)
+    r: int = Field(ge=0, le=MAX_COMBINATORICS_N)
+    favorable: int | None = Field(default=None, ge=0, le=MAX_COMBINATORICS_N)
+    proposed_answer: str | None = Field(default=None, max_length=200)
+
+
+class CombinatoricsResponse(BaseModel):
+    status: CombinatoricsStatus
+    operation: CombinatoricsOperation
+    computed: str | None
+    deterministic: bool
+    reason: str | None = None
+    detail: str

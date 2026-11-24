@@ -89,12 +89,19 @@ export type StepCheckStatus =
   | 'unsupported'
   | 'verification_incomplete'
 
+export type MisconceptionLabel =
+  | 'lost_solution_branch'
+  | 'introduced_extraneous_root'
+  | 'sign_error'
+  | 'general_error'
+
 export interface StepResult {
   index: number
   equation: string
   category: Category
   transition: TransitionKind
   detail: string
+  misconception: MisconceptionLabel | null
 }
 
 export interface CheckWorkRequest {
@@ -102,6 +109,7 @@ export interface CheckWorkRequest {
   variable?: string
   steps: string[]
   solutions?: string[] | null
+  hint_level?: number | null
 }
 
 export interface CheckWorkResponse {
@@ -113,4 +121,50 @@ export interface CheckWorkResponse {
   deterministic: boolean
   detail: string
   final_answer: VerifyResponse | null
+  hints: string[] | null
+}
+
+// Mirrors apps/api/axiom/models/practice.py (Phase 3).
+
+export type Skill = 'linear_equations' | 'quadratic_equations'
+export type Difficulty = 'easy' | 'medium' | 'hard'
+
+export interface NextProblemRequest {
+  learner_id: string
+}
+
+export interface NextProblemResponse {
+  skill: Skill
+  difficulty: Difficulty
+  equation: string
+  variable: string
+}
+
+export interface SubmitAnswerRequest {
+  learner_id: string
+  skill: Skill
+  equation: string
+  variable?: string
+  solutions: string[]
+  hints_used?: number
+}
+
+export interface SubmitAnswerResponse {
+  status: VerificationStatus
+  detail: string
+  correct: boolean | null
+  mastery_estimate: number
+}
+
+export interface MasterySummaryRequest {
+  learner_id: string
+}
+
+export interface SkillMastery {
+  skill: string
+  estimate: number
+}
+
+export interface MasterySummaryResponse {
+  skills: SkillMastery[]
 }

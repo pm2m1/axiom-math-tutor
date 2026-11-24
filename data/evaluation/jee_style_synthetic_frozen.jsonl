@@ -1,0 +1,12 @@
+{"id": "synth-frz-001", "kind": "equation", "topic": "linear_equations", "equation": "3*x - 4 = 11", "variable": "x", "correct_answer": ["5"], "incorrect_answer": ["6"], "source": "synthetic"}
+{"id": "synth-frz-002", "kind": "equation", "topic": "linear_equations", "equation": "5*x + 2 = 17", "variable": "x", "correct_answer": ["3"], "incorrect_answer": ["2"], "source": "synthetic"}
+{"id": "synth-frz-003", "kind": "equation", "topic": "quadratic_equations", "equation": "x^2 - 2*x + 1 = 0", "variable": "x", "correct_answer": ["1"], "incorrect_answer": ["1", "2"], "source": "synthetic"}
+{"id": "synth-frz-004", "kind": "equation", "topic": "quadratic_equations", "equation": "(x-2)*(x-3) = 0", "variable": "x", "correct_answer": ["2", "3"], "incorrect_answer": ["3", "4"], "source": "synthetic"}
+{"id": "synth-frz-005", "kind": "derivative", "topic": "differential_calculus", "expression": "exp(x)*cos(x)", "variable": "x", "correct_answer": "exp(x)*cos(x) - exp(x)*sin(x)", "incorrect_answer": "exp(x)*cos(x)", "source": "synthetic"}
+{"id": "synth-frz-006", "kind": "derivative", "topic": "differential_calculus", "expression": "x^3", "variable": "x", "correct_answer": "3*x^2", "incorrect_answer": "2*x^2", "source": "synthetic"}
+{"id": "synth-frz-007", "kind": "integral", "topic": "integral_calculus", "expression": "cos(x)", "variable": "x", "correct_answer": "sin(x)", "incorrect_answer": "cos(x)", "source": "synthetic"}
+{"id": "synth-frz-008", "kind": "integral", "topic": "integral_calculus", "expression": "x^2", "variable": "x", "correct_answer": "x^3/3", "incorrect_answer": "x^3", "source": "synthetic"}
+{"id": "synth-frz-009", "kind": "combinatorics", "topic": "combinatorics", "operation": "npr", "n": 6, "r": 3, "correct_answer": "120", "incorrect_answer": "20", "source": "synthetic"}
+{"id": "synth-frz-010", "kind": "combinatorics", "topic": "probability", "operation": "probability", "n": 5, "r": 3, "favorable": 5, "correct_answer": "1", "incorrect_answer": "1/2", "source": "synthetic"}
+{"id": "synth-frz-011", "kind": "unsupported", "topic": "multiple_variables", "equation": "x + y = 1", "variable": "x", "source": "synthetic"}
+{"id": "synth-frz-012", "kind": "equation", "topic": "quadratic_equations", "equation": "x^2 - 4 = 0", "variable": "x", "correct_answer": ["2", "-2"], "incorrect_answer": ["3"], "source": "synthetic"}

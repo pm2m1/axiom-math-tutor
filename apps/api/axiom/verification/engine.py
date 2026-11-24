@@ -31,7 +31,12 @@ from typing import Literal
 import sympy
 from sympy.polys.polyerrors import PolynomialError
 
-from axiom.verification.parser import ParseError, parse_candidate, parse_equation
+from axiom.verification.parser import (
+    ParseError,
+    parse_calculus_expression,
+    parse_candidate,
+    parse_equation,
+)
 
 Category = Literal["linear", "quadratic", "unsupported"]
 VerificationStatus = Literal[
@@ -427,6 +432,11 @@ _STATUS_DETAIL: dict[StepCheckStatus, str] = {
 }
 
 
+MisconceptionLabel = Literal[
+    "lost_solution_branch", "introduced_extraneous_root", "sign_error", "general_error"
+]
+
+
 @dataclass
 class StepOutcome:
     index: int  # 1-based; the original equation is step 0 and is not in this list
@@ -434,6 +444,7 @@ class StepOutcome:
     category: Category
     transition: TransitionKind
     detail: str
+    misconception: MisconceptionLabel | None = None
 
 
 @dataclass
@@ -483,6 +494,116 @@ def classify_transition(old_set: sympy.Set, new_set: sympy.Set) -> TransitionKin
     if old_set.intersect(new_set) == sympy.S.EmptySet:
         return "incompatible"
     return "partial_overlap"
+
+
+def classify_misconception(
+    old_set: sympy.Set, new_set: sympy.Set, transition: TransitionKind
+) -> MisconceptionLabel | None:
+    """A deterministic label for a non-equivalent transition, derived
+    *only* from facts already established by exact set comparison —
+    never a guess at the student's intent or the specific operation
+    they performed:
+
+    - `"narrowing"` → `"lost_solution_branch"`: true by the definition
+      of narrowing (some solutions were dropped), not an inference.
+    - `"broadening"` → `"introduced_extraneous_root"`: true by
+      definition (new, unverified solutions appeared).
+    - `"incompatible"`/`"partial_overlap"` where every element of
+      `old_set` negated equals `new_set` exactly → `"sign_error"`: this
+      is **checked**, not assumed — a real, common algebra mistake
+      (e.g. forgetting to flip a sign) produces exactly this pattern.
+    - Anything else non-equivalent → `"general_error"`: the mathematics
+      is confirmed wrong, but nothing here licenses a more specific
+      claim about *why*. A named-misconception taxonomy beyond this is
+      future tutoring-policy work, not something to approximate here.
+
+    Returns `None` for `"equivalent"` (nothing to diagnose) and for
+    `"unsupported"`/`"indeterminate"` (nothing was confirmed wrong)."""
+    if transition == "narrowing":
+        return "lost_solution_branch"
+    if transition == "broadening":
+        return "introduced_extraneous_root"
+    if transition in ("incompatible", "partial_overlap"):
+        if isinstance(old_set, sympy.FiniteSet) and isinstance(new_set, sympy.FiniteSet):
+            negated_old = sympy.FiniteSet(*(-element for element in old_set.args))
+            if negated_old == new_set:
+                return "sign_error"
+        return "general_error"
+    return None
+
+
+_CONCEPTUAL_HINT: dict[Category, str] = {
+    "linear": (
+        "This is a linear equation — it can be solved by isolating the "
+        "variable using inverse operations on both sides."
+    ),
+    "quadratic": (
+        "This is a quadratic equation — consider factoring, completing "
+        "the square, or the quadratic formula."
+    ),
+    "unsupported": "This problem is outside the currently supported verification scope.",
+}
+
+_DIRECTIONAL_HINT: dict[Category, str] = {
+    "linear": (
+        "Combine like terms on each side first, then apply the same "
+        "operation to both sides to isolate the variable."
+    ),
+    "quadratic": (
+        "Try moving every term to one side so the equation equals zero, "
+        "then look for a way to factor it or apply the quadratic formula."
+    ),
+    "unsupported": "No further guidance is available for this problem.",
+}
+
+
+def generate_hint_ladder(category: Category, true_set: sympy.Set) -> list[str]:
+    """Four hint levels, least to most revealing. Only level 4 names the
+    actual solution(s) — callers are responsible for not returning it
+    unless the student explicitly asked for that level (see
+    `docs/jee-solving.md`'s tutoring-policy section); this function
+    itself always computes all four, it does not gate disclosure.
+    Levels 1–2 are fixed guidance text per category; levels 3–4 are
+    derived from the already-computed, verified `true_set` — never
+    invented."""
+    level1 = _CONCEPTUAL_HINT[category]
+    level2 = _DIRECTIONAL_HINT[category]
+
+    if true_set == sympy.S.EmptySet:
+        level3 = "This equation has no real solutions."
+        level4 = "There is no real solution — the real solution set is empty."
+    elif true_set == sympy.S.Reals:
+        level3 = "This equation holds for every real number — it's an identity."
+        level4 = "Every real number is a solution."
+    elif isinstance(true_set, sympy.FiniteSet):
+        count = len(true_set)
+        level3 = f"This equation has exactly {count} real solution(s)."
+        values = ", ".join(sorted(str(v) for v in true_set.args))
+        level4 = f"The real solution(s): {values}."
+    else:
+        level3 = "The exact solution structure could not be determined."
+        level4 = "The exact solution could not be determined."
+
+    return [level1, level2, level3, level4]
+
+
+def hints_for_equation(equation_text: str, variable: str, hint_level: int) -> list[str] | None:
+    """Convenience wrapper: parses and classifies `equation_text`, then
+    returns `generate_hint_ladder(...)` sliced to `hint_level` (1–4).
+    `None` if the equation itself can't be classified/solved — there is
+    no verified structure to hint from in that case."""
+    try:
+        lhs, rhs = parse_equation(equation_text, variable)
+    except ParseError:
+        return None
+    var = sympy.Symbol(variable)
+    category = classify(lhs, rhs, var)
+    if category is None:
+        return None
+    true_set = solve_real(lhs, rhs, var)
+    if not is_decidable_set(true_set):
+        return None
+    return generate_hint_ladder(category, true_set)[:hint_level]
 
 
 def check_steps(
@@ -594,8 +715,16 @@ def check_steps(
             continue
 
         transition = classify_transition(previous_set, current_set)
+        misconception = classify_misconception(previous_set, current_set, transition)
         steps.append(
-            StepOutcome(index, step_text, category_i, transition, _TRANSITION_DETAIL[transition])
+            StepOutcome(
+                index,
+                step_text,
+                category_i,
+                transition,
+                _TRANSITION_DETAIL[transition],
+                misconception,
+            )
         )
         previous_set = current_set
 
@@ -639,4 +768,365 @@ def check_steps(
         deterministic=not any_indeterminate,
         detail=_STATUS_DETAIL[status],
         final_answer=final_answer,
+    )
+
+
+# --- Phase 3: calculus verification (derivatives / indefinite integrals) --
+
+CalculusStatus = Literal[
+    "computed", "verified_correct", "verified_incorrect", "unsupported", "indeterminate"
+]
+
+
+@dataclass
+class CalculusOutcome:
+    """`computed` is this engine's own closed-form result (via SymPy
+    `diff`/`integrate`), shown for reference only — it is a *computed*
+    answer, not by itself a verdict on the student's submission.
+    `status` is always reached by independently checking the *student's*
+    proposed answer (`verified`), never by comparing the two for a
+    textual/structural match — two different closed forms can be
+    equally correct (e.g. differing by a constant or a trig identity).
+    `deterministic` is `False` only for `"indeterminate"`, exactly the
+    convention `VerificationOutcome` already uses."""
+
+    status: CalculusStatus
+    operation: Literal["derivative", "integral"]
+    computed: str | None
+    deterministic: bool
+    reason: str | None
+    detail: str
+
+
+def compute_derivative(expression_text: str, variable: str) -> CalculusOutcome:
+    """Computes (does not verify anything — there is no proposed answer
+    to check) the exact derivative of `expression_text`. Used by the
+    deterministic problem router (`axiom/problem_router.py`) to answer
+    an explicit computation command directly."""
+    var = sympy.Symbol(variable)
+    try:
+        expr = parse_calculus_expression(expression_text, variable)
+    except ParseError as exc:
+        return CalculusOutcome(
+            status="unsupported",
+            operation="derivative",
+            computed=None,
+            deterministic=True,
+            reason="unparseable_expression",
+            detail=f"could not parse the expression: {exc}",
+        )
+    computed = sympy.diff(expr, var)
+    return CalculusOutcome(
+        status="computed",
+        operation="derivative",
+        computed=str(computed),
+        deterministic=True,
+        reason=None,
+        detail="exact derivative computed",
+    )
+
+
+def compute_integral(expression_text: str, variable: str) -> CalculusOutcome:
+    """Computes the exact indefinite integral of `expression_text` (no
+    proposed answer to verify). See `compute_derivative`."""
+    var = sympy.Symbol(variable)
+    try:
+        expr = parse_calculus_expression(expression_text, variable)
+    except ParseError as exc:
+        return CalculusOutcome(
+            status="unsupported",
+            operation="integral",
+            computed=None,
+            deterministic=True,
+            reason="unparseable_expression",
+            detail=f"could not parse the expression: {exc}",
+        )
+    result = sympy.integrate(expr, var)
+    if isinstance(result, sympy.Integral):
+        return CalculusOutcome(
+            status="unsupported",
+            operation="integral",
+            computed=None,
+            deterministic=True,
+            reason="no_closed_form",
+            detail="no closed-form antiderivative was found",
+        )
+    return CalculusOutcome(
+        status="computed",
+        operation="integral",
+        computed=str(result),
+        deterministic=True,
+        reason=None,
+        detail="exact antiderivative computed",
+    )
+
+
+def check_derivative(expression_text: str, variable: str, proposed_text: str) -> CalculusOutcome:
+    """Verifies a proposed derivative of `expression_text` by exact
+    symbolic equality against SymPy's own `diff()` — not by comparing
+    the student's text to a reference string, which would reject
+    equally valid alternate forms."""
+    var = sympy.Symbol(variable)
+    try:
+        expr = parse_calculus_expression(expression_text, variable)
+    except ParseError as exc:
+        return CalculusOutcome(
+            status="unsupported",
+            operation="derivative",
+            computed=None,
+            deterministic=True,
+            reason="unparseable_expression",
+            detail=f"could not parse the expression: {exc}",
+        )
+    try:
+        proposed = parse_calculus_expression(proposed_text, variable)
+    except ParseError as exc:
+        return CalculusOutcome(
+            status="unsupported",
+            operation="derivative",
+            computed=None,
+            deterministic=True,
+            reason="unparseable_proposed_derivative",
+            detail=f"could not parse the proposed derivative: {exc}",
+        )
+
+    computed = sympy.diff(expr, var)
+    decision = (proposed - computed).equals(0)
+    if decision is None:
+        return CalculusOutcome(
+            status="indeterminate",
+            operation="derivative",
+            computed=str(computed),
+            deterministic=False,
+            reason="equality_undecidable",
+            detail="could not exactly decide whether the proposed derivative is correct",
+        )
+    if decision:
+        return CalculusOutcome(
+            status="verified_correct",
+            operation="derivative",
+            computed=str(computed),
+            deterministic=True,
+            reason=None,
+            detail="the proposed derivative is exactly correct",
+        )
+    return CalculusOutcome(
+        status="verified_incorrect",
+        operation="derivative",
+        computed=str(computed),
+        deterministic=True,
+        reason="incorrect_derivative",
+        detail="the proposed derivative does not match the exact derivative",
+    )
+
+
+def check_integral(expression_text: str, variable: str, proposed_text: str) -> CalculusOutcome:
+    """Verifies a proposed *indefinite* integral by differentiating the
+    student's own candidate back and checking it exactly equals the
+    original expression — the correct general method, and one that
+    automatically handles an arbitrary additive constant (a derivative
+    removes it) without special-casing `+ C`. Never checks the
+    candidate against SymPy's own `integrate()` result directly: two
+    antiderivatives can be equally valid while looking algebraically
+    different (e.g. differing by a constant from a trig identity).
+
+    Only indefinite integrals are supported. Definite integrals (bounds,
+    singularities) are explicitly out of scope for this milestone — see
+    `docs/verification.md`."""
+    var = sympy.Symbol(variable)
+    try:
+        expr = parse_calculus_expression(expression_text, variable)
+    except ParseError as exc:
+        return CalculusOutcome(
+            status="unsupported",
+            operation="integral",
+            computed=None,
+            deterministic=True,
+            reason="unparseable_expression",
+            detail=f"could not parse the expression: {exc}",
+        )
+    try:
+        proposed = parse_calculus_expression(proposed_text, variable)
+    except ParseError as exc:
+        return CalculusOutcome(
+            status="unsupported",
+            operation="integral",
+            computed=None,
+            deterministic=True,
+            reason="unparseable_proposed_antiderivative",
+            detail=f"could not parse the proposed antiderivative: {exc}",
+        )
+
+    computed_antiderivative = sympy.integrate(expr, var)
+    computed_str = (
+        None
+        if isinstance(computed_antiderivative, sympy.Integral)
+        else str(computed_antiderivative)
+    )
+
+    decision = (sympy.diff(proposed, var) - expr).equals(0)
+    if decision is None:
+        return CalculusOutcome(
+            status="indeterminate",
+            operation="integral",
+            computed=computed_str,
+            deterministic=False,
+            reason="equality_undecidable",
+            detail="could not exactly decide whether the proposed antiderivative is correct",
+        )
+    if decision:
+        return CalculusOutcome(
+            status="verified_correct",
+            operation="integral",
+            computed=computed_str,
+            deterministic=True,
+            reason=None,
+            detail="differentiating the proposed antiderivative exactly reproduces the original",
+        )
+    return CalculusOutcome(
+        status="verified_incorrect",
+        operation="integral",
+        computed=computed_str,
+        deterministic=True,
+        reason="incorrect_antiderivative",
+        detail="differentiating the proposed antiderivative does not reproduce the original",
+    )
+
+
+# --- Phase 3: combinatorics / probability (exact rational) ----------------
+
+CombinatoricsOperation = Literal["ncr", "npr", "probability"]
+CombinatoricsStatus = Literal[
+    "computed", "verified_correct", "verified_incorrect", "unsupported", "indeterminate"
+]
+
+MAX_COMBINATORICS_N = 100
+
+
+@dataclass
+class CombinatoricsOutcome:
+    """`status` is `"computed"` when no `proposed_answer` was given —
+    `computed` is then the only result, with nothing to verify.
+    `"verified_correct"`/`"verified_incorrect"` only apply once a
+    proposed answer was actually checked against the exact value."""
+
+    status: CombinatoricsStatus
+    operation: CombinatoricsOperation
+    computed: str | None
+    deterministic: bool
+    reason: str | None
+    detail: str
+
+
+class _CombinatoricsInputError(ValueError):
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(detail)
+        self.reason = reason
+
+
+def _compute_combinatorics(
+    operation: CombinatoricsOperation, n: int, r: int, favorable: int | None
+) -> sympy.Rational | sympy.Integer:
+    """Exact rational/integer arithmetic only — `sympy.binomial`,
+    `sympy.factorial` — never a floating-point approximation."""
+    if r > n:
+        raise _CombinatoricsInputError("r_exceeds_n", "r cannot exceed n")
+
+    if operation == "ncr":
+        return sympy.binomial(n, r)
+    if operation == "npr":
+        return sympy.factorial(n) / sympy.factorial(n - r)
+
+    if favorable is None:
+        raise _CombinatoricsInputError(
+            "favorable_required", "'favorable' is required for a probability calculation"
+        )
+    if favorable > n:
+        raise _CombinatoricsInputError("favorable_exceeds_n", "favorable cannot exceed n")
+    total_ways = sympy.binomial(n, r)
+    if total_ways == 0:
+        raise _CombinatoricsInputError(
+            "no_valid_selection", "there is no way to choose r items from n"
+        )
+    favorable_ways = sympy.binomial(favorable, r)
+    return sympy.Rational(favorable_ways, total_ways)
+
+
+def check_combinatorics(
+    operation: CombinatoricsOperation,
+    n: int,
+    r: int,
+    favorable: int | None = None,
+    proposed_answer: str | None = None,
+) -> CombinatoricsOutcome:
+    """`"ncr"`/`"npr"` are plain exact counts. `"probability"` is
+    deliberately narrow and explicit, not a general solver: it is the
+    probability that an r-item selection drawn from n items (all
+    equally likely, no replacement) consists entirely of items from a
+    `favorable` subset of size `favorable` — the classic "all drawn
+    balls are red" JEE pattern — computed as
+    `C(favorable, r) / C(n, r)`. Any other probability question (e.g.
+    "at least one", conditional probability, non-uniform outcomes) is
+    out of scope and not something this function attempts to recognize
+    or guess at."""
+    try:
+        computed = _compute_combinatorics(operation, n, r, favorable)
+    except _CombinatoricsInputError as exc:
+        return CombinatoricsOutcome(
+            status="unsupported",
+            operation=operation,
+            computed=None,
+            deterministic=True,
+            reason=exc.reason,
+            detail=str(exc),
+        )
+
+    if proposed_answer is None:
+        return CombinatoricsOutcome(
+            status="computed",
+            operation=operation,
+            computed=str(computed),
+            deterministic=True,
+            reason=None,
+            detail="exact value computed",
+        )
+
+    try:
+        proposed = parse_candidate(proposed_answer)
+    except ParseError as exc:
+        return CombinatoricsOutcome(
+            status="unsupported",
+            operation=operation,
+            computed=str(computed),
+            deterministic=True,
+            reason="unparseable_proposed_answer",
+            detail=f"could not parse the proposed answer: {exc}",
+        )
+
+    decision = (proposed - computed).equals(0)
+    if decision is None:
+        return CombinatoricsOutcome(
+            status="indeterminate",
+            operation=operation,
+            computed=str(computed),
+            deterministic=False,
+            reason="equality_undecidable",
+            detail="could not exactly decide whether the proposed answer is correct",
+        )
+    if decision:
+        return CombinatoricsOutcome(
+            status="verified_correct",
+            operation=operation,
+            computed=str(computed),
+            deterministic=True,
+            reason=None,
+            detail="the proposed answer is exactly correct",
+        )
+    return CombinatoricsOutcome(
+        status="verified_incorrect",
+        operation=operation,
+        computed=str(computed),
+        deterministic=True,
+        reason="incorrect_value",
+        detail="the proposed answer does not match the exact value",
     )

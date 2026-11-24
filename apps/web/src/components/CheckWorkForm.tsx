@@ -2,10 +2,13 @@ import { useRef, useState, type FormEvent } from 'react'
 import { checkWork, EQUATION_MAX_LENGTH, MAX_SOLUTIONS, MAX_STEPS } from '../api/client'
 import type {
   CheckWorkResponse,
+  MisconceptionLabel,
   TransitionKind,
   VerificationStatus,
   VerifyResponse,
 } from '../api/types'
+
+const MAX_HINT_LEVEL = 4
 
 type RequestState =
   | { kind: 'idle' }
@@ -50,6 +53,13 @@ const FINAL_STATUS_LABEL: Record<VerificationStatus, string> = {
   indeterminate: 'Indeterminate',
 }
 
+const MISCONCEPTION_LABEL: Record<MisconceptionLabel, string> = {
+  lost_solution_branch: 'Likely issue: this dropped a valid solution branch.',
+  introduced_extraneous_root: 'Likely issue: this introduced a solution that still needs checking.',
+  sign_error: 'Likely issue: a sign error (a value appears negated).',
+  general_error: 'A mathematical error was confirmed here, but the specific cause could not be determined.',
+}
+
 /** Student-facing Check My Work (Phase 2B) — posts to `/api/v1/check-work`,
  * a deterministic SymPy check, never an LLM judgment. Rating Tutor-mode
  * explanations as "verified" is explicitly not a claim this makes. */
@@ -61,8 +71,32 @@ export function CheckWorkForm() {
   const [state, setState] = useState<RequestState>({ kind: 'idle' })
   const abortRef = useRef<AbortController | null>(null)
 
+  const [hints, setHints] = useState<string[] | null>(null)
+  const [hintLoading, setHintLoading] = useState(false)
+  const [hintError, setHintError] = useState(false)
+
   const loading = state.kind === 'loading'
   const submitDisabled = loading || equation.trim().length === 0
+  const hintLevel = hints?.length ?? 0
+  const hintDisabled = hintLoading || equation.trim().length === 0 || hintLevel >= MAX_HINT_LEVEL
+
+  async function requestNextHint() {
+    if (hintDisabled) return
+    setHintLoading(true)
+    setHintError(false)
+    try {
+      const response = await checkWork({
+        equation,
+        steps: [],
+        hint_level: hintLevel + 1,
+      })
+      setHints(response.hints)
+    } catch {
+      setHintError(true)
+    } finally {
+      setHintLoading(false)
+    }
+  }
 
   function addStep() {
     if (steps.length >= MAX_STEPS) return
@@ -133,10 +167,33 @@ export function CheckWorkForm() {
           type="text"
           placeholder="e.g. 2*x + 3 = 11"
           value={equation}
-          onChange={(event) => setEquation(event.target.value)}
+          onChange={(event) => {
+            setEquation(event.target.value)
+            setHints(null)
+            setHintError(false)
+          }}
           maxLength={EQUATION_MAX_LENGTH}
           disabled={loading}
         />
+
+        <div className="check-work-hints">
+          <button
+            type="button"
+            className="check-work-add-button"
+            onClick={requestNextHint}
+            disabled={hintDisabled}
+          >
+            {hintLoading ? 'Loading hint…' : hintLevel === 0 ? 'Get a hint' : 'Get another hint'}
+          </button>
+          {hintError && <p className="check-work-error">Could not load a hint. Please try again.</p>}
+          {hints && (
+            <ol className="check-work-hint-list">
+              {hints.map((hint, i) => (
+                <li key={i}>{hint}</li>
+              ))}
+            </ol>
+          )}
+        </div>
 
         <div className="check-work-steps">
           <p className="check-work-label">Your steps (optional)</p>
@@ -285,6 +342,11 @@ function CheckWorkResultView({ response }: { response: CheckWorkResponse }) {
                   {TRANSITION_LABEL[step.transition]}
                 </p>
                 <p className="check-work-step-detail">{step.detail}</p>
+                {step.misconception && (
+                  <p className="check-work-misconception">
+                    {MISCONCEPTION_LABEL[step.misconception]}
+                  </p>
+                )}
               </li>
             )
           })}

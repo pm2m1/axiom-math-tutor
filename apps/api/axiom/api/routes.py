@@ -6,12 +6,14 @@ from axiom.api.dependencies import (
     RetrievalPipeline,
     get_evidence_judge,
     get_feedback_store,
+    get_mastery_store,
     get_retrieval_pipeline,
     get_web_search_client,
     get_workflow,
 )
 from axiom.core.config import get_settings
 from axiom.feedback import FeedbackStore, UnknownAnswerError
+from axiom.mastery import MasteryStore
 from axiom.models.answer import AnswerResponse
 from axiom.models.evidence_routing import (
     EvidenceRoutingResponse,
@@ -20,17 +22,36 @@ from axiom.models.evidence_routing import (
 )
 from axiom.models.evidence_routing import WebSource as WebSourceModel
 from axiom.models.feedback import FeedbackRequest, FeedbackResponse
+from axiom.models.practice import (
+    MasterySummaryRequest,
+    MasterySummaryResponse,
+    NextProblemRequest,
+    NextProblemResponse,
+    SkillMastery,
+    SubmitAnswerRequest,
+    SubmitAnswerResponse,
+)
 from axiom.models.status import HealthResponse, StatusResponse
 from axiom.models.verification import (
+    CalculusResponse,
     CandidateResponse,
     CheckWorkRequest,
     CheckWorkResponse,
+    CombinatoricsRequest,
+    CombinatoricsResponse,
+    DerivativeRequest,
+    IntegralRequest,
     StepResult,
     VerifyRequest,
     VerifyResponse,
 )
+from axiom.practice import generate_practice_problem, select_next_problem
 from axiom.retrieval.evidence_judge import JudgeClient
+from axiom.verification.engine import check_combinatorics as run_check_combinatorics
+from axiom.verification.engine import check_derivative as run_check_derivative
+from axiom.verification.engine import check_integral as run_check_integral
 from axiom.verification.engine import check_steps as run_check_steps
+from axiom.verification.engine import hints_for_equation as run_hints_for_equation
 from axiom.verification.engine import verify as run_verification
 from axiom.web_search import WebSearchClient
 from axiom.workflow import WorkflowState, initial_state, response_from_state
@@ -140,12 +161,13 @@ def answer_with_generation(
     Additive to `/api/v1/question`, which is unchanged and still routes
     without generating an answer.
 
-    `answer_id` (Phase 1L) is assigned here, outside the graph, only for
-    an actual answer (`kb`/`web`) — feedback can only attach to a request
-    that produced one. See docs/feedback.md."""
+    `answer_id` (Phase 1L, extended in Phase 3) is assigned here, outside
+    the graph, only for an actual answer (`kb`/`web`/`computed`) —
+    feedback can only attach to a request that produced one. See
+    docs/feedback.md."""
     raw_result = workflow.invoke(initial_state(request.question))
     response = response_from_state(cast(WorkflowState, raw_result))
-    if response.status in ("kb", "web"):
+    if response.status in ("kb", "web", "computed"):
         response.answer_id = feedback_store.record_answer(response.status)
     return response
 
@@ -213,6 +235,9 @@ def check_work(request: CheckWorkRequest) -> CheckWorkResponse:
                 for c in outcome.final_answer.candidates
             ],
         )
+    hints = None
+    if request.hint_level is not None:
+        hints = run_hints_for_equation(request.equation, request.variable, request.hint_level)
     return CheckWorkResponse(
         status=outcome.status,
         steps=[
@@ -222,6 +247,7 @@ def check_work(request: CheckWorkRequest) -> CheckWorkResponse:
                 category=s.category,
                 transition=s.transition,
                 detail=s.detail,
+                misconception=s.misconception,
             )
             for s in outcome.steps
         ],
@@ -231,4 +257,130 @@ def check_work(request: CheckWorkRequest) -> CheckWorkResponse:
         deterministic=outcome.deterministic,
         detail=outcome.detail,
         final_answer=final_answer,
+        hints=hints,
+    )
+
+
+@router.post("/api/v1/verify-derivative", response_model=CalculusResponse)
+def verify_derivative(request: DerivativeRequest) -> CalculusResponse:
+    """Deterministic SymPy derivative verification (Phase 3) — no LLM,
+    no network call. See docs/verification.md's "Calculus" section."""
+    outcome = run_check_derivative(
+        request.expression, request.variable, request.proposed_derivative
+    )
+    return CalculusResponse(
+        status=outcome.status,
+        operation=outcome.operation,
+        computed=outcome.computed,
+        deterministic=outcome.deterministic,
+        reason=outcome.reason,
+        detail=outcome.detail,
+    )
+
+
+@router.post("/api/v1/verify-integral", response_model=CalculusResponse)
+def verify_integral(request: IntegralRequest) -> CalculusResponse:
+    """Deterministic SymPy indefinite-integral verification (Phase 3) —
+    no LLM, no network call. Definite integrals are out of scope. See
+    docs/verification.md's "Calculus" section."""
+    outcome = run_check_integral(
+        request.expression, request.variable, request.proposed_antiderivative
+    )
+    return CalculusResponse(
+        status=outcome.status,
+        operation=outcome.operation,
+        computed=outcome.computed,
+        deterministic=outcome.deterministic,
+        reason=outcome.reason,
+        detail=outcome.detail,
+    )
+
+
+@router.post("/api/v1/count", response_model=CombinatoricsResponse)
+def count_combinatorics(request: CombinatoricsRequest) -> CombinatoricsResponse:
+    """Exact rational combinatorics/probability (Phase 3) — `nCr`,
+    `nPr`, and a narrowly-defined "all drawn items favorable" probability
+    pattern. No LLM, no network call. See docs/verification.md."""
+    outcome = run_check_combinatorics(
+        request.operation, request.n, request.r, request.favorable, request.proposed_answer
+    )
+    return CombinatoricsResponse(
+        status=outcome.status,
+        operation=outcome.operation,
+        computed=outcome.computed,
+        deterministic=outcome.deterministic,
+        reason=outcome.reason,
+        detail=outcome.detail,
+    )
+
+
+@router.post("/api/v1/practice/next", response_model=NextProblemResponse)
+def next_practice_problem(
+    request: NextProblemRequest, mastery_store: MasteryStore = Depends(get_mastery_store)
+) -> NextProblemResponse:
+    """Selects a skill/difficulty from the learner's current mastery
+    (`axiom/practice.py::select_next_problem` — a documented heuristic,
+    not a statistically validated adaptive algorithm), generates a
+    problem from a small hand-designed template bank, and independently
+    re-verifies it through the same engine `/api/v1/verify` uses before
+    ever returning it. See docs/jee-solving.md."""
+    linear_mastery = mastery_store.get_mastery(request.learner_id, "linear_equations")
+    quadratic_mastery = mastery_store.get_mastery(request.learner_id, "quadratic_equations")
+    skill, difficulty = select_next_problem(linear_mastery, quadratic_mastery)
+    problem = generate_practice_problem(skill, difficulty)
+    if problem is None:
+        raise HTTPException(status_code=503, detail="practice problem generation failed")
+    return NextProblemResponse(
+        skill=problem.skill,
+        difficulty=problem.difficulty,
+        equation=problem.equation,
+        variable=problem.variable,
+    )
+
+
+@router.post("/api/v1/practice/submit", response_model=SubmitAnswerResponse)
+def submit_practice_answer(
+    request: SubmitAnswerRequest, mastery_store: MasteryStore = Depends(get_mastery_store)
+) -> SubmitAnswerResponse:
+    """Grades with the exact same deterministic engine `/api/v1/verify`
+    uses — an LLM is never asked whether a practice answer is correct.
+    Mastery is updated only for a decisive `verified_correct`/
+    `verified_incorrect` result; see `axiom/mastery.py` for the exact
+    update rule and why every other outcome withholds the update."""
+    outcome = run_verification(request.equation, request.variable, request.solutions)
+    correct: bool | None
+    if outcome.status == "verified_correct":
+        correct = True
+    elif outcome.status == "verified_incorrect":
+        correct = False
+    else:
+        correct = None
+    result = mastery_store.record_attempt(
+        request.learner_id,
+        request.skill,
+        verified=correct is not None,
+        correct=correct,
+        hints_used=request.hints_used,
+    )
+    return SubmitAnswerResponse(
+        status=outcome.status,
+        detail=outcome.detail,
+        correct=correct,
+        mastery_estimate=result.estimate,
+    )
+
+
+@router.post("/api/v1/mastery/summary", response_model=MasterySummaryResponse)
+def mastery_summary(
+    request: MasterySummaryRequest, mastery_store: MasteryStore = Depends(get_mastery_store)
+) -> MasterySummaryResponse:
+    """Always reports both known practice skills, defaulting to the
+    uninformative prior for one never attempted — a simpler, more
+    predictable contract for the frontend than a sparse list."""
+    skills = ["linear_equations", "quadratic_equations"]
+    return MasterySummaryResponse(
+        skills=[
+            SkillMastery(skill=skill, estimate=mastery_store.get_mastery(request.learner_id, skill))
+            for skill in skills
+        ]
     )

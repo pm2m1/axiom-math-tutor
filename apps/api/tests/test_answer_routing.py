@@ -198,3 +198,50 @@ def test_feedback_rejects_empty_answer_id(tmp_path: Path) -> None:
     response = client.post("/api/v1/feedback", json={"answer_id": "", "rating": "up"})
 
     assert response.status_code == 422
+
+
+def test_answer_route_returns_computed_result_for_a_structured_command(tmp_path: Path) -> None:
+    # The deterministic problem router (Phase 3) matches this before the
+    # graph ever reaches retrieval/judge/search/generation — fakes that
+    # would raise on any call still prove that via a clean 200 response.
+    _override_feedback_store(tmp_path)
+    judge = _FakeJudge(JudgeOutcome(None, "should never be called", None, 0.1))
+    search = _FakeSearchClient(WebSearchOutcome([], None))
+    generator = _FakeGenerator(_good_answer([]))
+    graph = build_workflow(_FakeRetriever([]), judge, search, generator)
+    app.dependency_overrides[get_workflow] = lambda: graph
+
+    response = client.post("/api/v1/answer", json={"question": "differentiate x^2"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "computed"
+    assert body["verification_method"] == "deterministic_sympy"
+    assert body["solver_category"] == "derivative"
+    assert "2*x" in body["answer"]
+    assert body["answer_id"] is not None
+    assert judge.calls == 0
+    assert search.calls == 0
+    assert generator.calls == 0
+
+
+def test_answer_route_kb_answer_reports_evidence_grounded_verification_method(
+    tmp_path: Path,
+) -> None:
+    _override_feedback_store(tmp_path)
+    retriever = _FakeRetriever(["a"])
+    judge = _FakeJudge(_sufficient(["a"]))
+    search = _FakeSearchClient(WebSearchOutcome([], None))
+    generator = _FakeGenerator(_good_answer(["a"]))
+    graph = build_workflow(retriever, judge, search, generator)
+    app.dependency_overrides[get_workflow] = lambda: graph
+
+    response = client.post(
+        "/api/v1/answer", json={"question": "What is the symmetric property of equality?"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "kb"
+    assert body["verification_method"] == "evidence_grounded_llm"
+    assert body["solver_category"] is None

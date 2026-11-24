@@ -28,6 +28,7 @@ def test_check_work_all_steps_equivalent() -> None:
         "category": "linear",
         "transition": "equivalent",
         "detail": "this step preserves the real solution set",
+        "misconception": None,
     }
     assert body["final_answer"]["status"] == "verified_correct"
 
@@ -211,3 +212,68 @@ def test_existing_routes_still_work_after_adding_check_work() -> None:
         client.post("/api/v1/verify", json={"equation": "2*x = 4", "solutions": ["2"]}).status_code
         == 200
     )
+
+
+def test_check_work_reports_sign_error_misconception() -> None:
+    response = client.post("/api/v1/check-work", json={"equation": "2*x = 8", "steps": ["x = -4"]})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["steps"][0]["transition"] == "incompatible"
+    assert body["steps"][0]["misconception"] == "sign_error"
+
+
+def test_check_work_reports_lost_branch_misconception() -> None:
+    response = client.post("/api/v1/check-work", json={"equation": "x^2 = 1", "steps": ["x = 1"]})
+
+    assert response.status_code == 200
+    assert response.json()["steps"][0]["misconception"] == "lost_solution_branch"
+
+
+def test_check_work_no_hints_by_default() -> None:
+    response = client.post("/api/v1/check-work", json={"equation": "2*x = 8", "steps": []})
+
+    assert response.status_code == 200
+    assert response.json()["hints"] is None
+
+
+def test_check_work_hints_sliced_to_requested_level() -> None:
+    response = client.post(
+        "/api/v1/check-work", json={"equation": "2*x = 8", "steps": [], "hint_level": 2}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["hints"]) == 2
+    assert "4" not in body["hints"][0]
+    assert "4" not in body["hints"][1]
+
+
+def test_check_work_level_four_hint_names_the_solution() -> None:
+    response = client.post(
+        "/api/v1/check-work", json={"equation": "2*x = 8", "steps": [], "hint_level": 4}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["hints"]) == 4
+    assert "4" in body["hints"][3]
+
+
+def test_check_work_rejects_hint_level_out_of_range() -> None:
+    response = client.post(
+        "/api/v1/check-work", json={"equation": "2*x = 8", "steps": [], "hint_level": 5}
+    )
+
+    assert response.status_code == 422
+
+
+def test_check_work_hints_none_for_unsupported_equation() -> None:
+    response = client.post(
+        "/api/v1/check-work", json={"equation": "x^3 = 8", "steps": [], "hint_level": 1}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "unsupported"
+    assert body["hints"] is None

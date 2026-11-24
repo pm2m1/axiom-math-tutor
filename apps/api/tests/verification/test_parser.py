@@ -4,6 +4,7 @@ import sympy
 from axiom.verification.parser import (
     MAX_EXPONENT,
     ParseError,
+    parse_calculus_expression,
     parse_candidate,
     parse_equation,
 )
@@ -177,3 +178,51 @@ class TestParseCandidate:
         # — still correctly rejected, just by an earlier, cheaper layer.
         with pytest.raises(ParseError, match="unsupported characters"):
             parse_candidate("sqrt(2, 3)")
+
+
+class TestParseCalculusExpression:
+    def test_polynomial(self) -> None:
+        assert parse_calculus_expression("x^2 + 2*x + 1", "x") == X**2 + 2 * X + 1
+
+    def test_trig_functions_with_variable_argument(self) -> None:
+        assert parse_calculus_expression("sin(x)", "x") == sympy.sin(X)
+        assert parse_calculus_expression("cos(x)", "x") == sympy.cos(X)
+        assert parse_calculus_expression("tan(x)", "x") == sympy.tan(X)
+
+    def test_exp_and_log_with_variable_argument(self) -> None:
+        assert parse_calculus_expression("exp(x)", "x") == sympy.exp(X)
+        assert parse_calculus_expression("log(x)", "x") == sympy.log(X)
+
+    def test_sqrt_with_variable_argument_is_allowed_here(self) -> None:
+        assert parse_calculus_expression("sqrt(x)", "x") == sympy.sqrt(X)
+
+    def test_composition(self) -> None:
+        assert parse_calculus_expression("exp(x) * cos(x)", "x") == sympy.exp(X) * sympy.cos(X)
+
+    def test_sqrt_of_negative_constant_still_rejected(self) -> None:
+        with pytest.raises(ParseError, match="negative"):
+            parse_calculus_expression("sqrt(-4)", "x")
+
+    def test_variable_denominator_still_rejected(self) -> None:
+        with pytest.raises(ParseError, match="denominator"):
+            parse_calculus_expression("1/x", "x")
+
+    def test_unknown_function_rejected(self) -> None:
+        with pytest.raises(ParseError, match="only"):
+            parse_calculus_expression("abs(x)", "x")
+
+    def test_arbitrary_function_call_rejected(self) -> None:
+        with pytest.raises(ParseError, match="unsupported characters"):
+            parse_calculus_expression('x = __import__("os")', "x")
+
+    def test_huge_exponent_still_rejected(self) -> None:
+        with pytest.raises(ParseError, match="exponent"):
+            parse_calculus_expression(f"x^{MAX_EXPONENT + 1}", "x")
+
+    def test_equation_mode_unaffected_sin_still_rejected(self) -> None:
+        with pytest.raises(ParseError, match="only sqrt"):
+            parse_equation("sin(x) = 1", "x")
+
+    def test_candidate_mode_unaffected_sin_still_rejected(self) -> None:
+        with pytest.raises(ParseError, match="only sqrt"):
+            parse_candidate("sin(1)")

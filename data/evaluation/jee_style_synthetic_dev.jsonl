@@ -1,0 +1,10 @@
+{"id": "synth-dev-001", "kind": "equation", "topic": "linear_equations", "equation": "2*x + 1 = 7", "variable": "x", "correct_answer": ["3"], "incorrect_answer": ["4"], "source": "synthetic"}
+{"id": "synth-dev-002", "kind": "equation", "topic": "quadratic_equations", "equation": "x^2 - 5*x + 6 = 0", "variable": "x", "correct_answer": ["2", "3"], "incorrect_answer": ["2", "4"], "source": "synthetic"}
+{"id": "synth-dev-003", "kind": "equation", "topic": "quadratic_equations", "equation": "x^2 + 1 = 0", "variable": "x", "correct_answer": [], "incorrect_answer": ["1"], "source": "synthetic"}
+{"id": "synth-dev-004", "kind": "derivative", "topic": "differential_calculus", "expression": "x^2", "variable": "x", "correct_answer": "2*x", "incorrect_answer": "x", "source": "synthetic"}
+{"id": "synth-dev-005", "kind": "derivative", "topic": "differential_calculus", "expression": "sin(x)", "variable": "x", "correct_answer": "cos(x)", "incorrect_answer": "sin(x)", "source": "synthetic"}
+{"id": "synth-dev-006", "kind": "integral", "topic": "integral_calculus", "expression": "2*x", "variable": "x", "correct_answer": "x^2", "incorrect_answer": "x^2/2", "source": "synthetic"}
+{"id": "synth-dev-007", "kind": "combinatorics", "topic": "combinatorics", "operation": "ncr", "n": 5, "r": 2, "correct_answer": "10", "incorrect_answer": "9", "source": "synthetic"}
+{"id": "synth-dev-008", "kind": "combinatorics", "topic": "probability", "operation": "probability", "n": 10, "r": 2, "favorable": 3, "correct_answer": "1/15", "incorrect_answer": "1/2", "source": "synthetic"}
+{"id": "synth-dev-009", "kind": "unsupported", "topic": "higher_degree_polynomial", "equation": "x^3 - x = 0", "variable": "x", "source": "synthetic"}
+{"id": "synth-dev-010", "kind": "equation", "topic": "quadratic_equations", "equation": "x^2 - 2 = 0", "variable": "x", "correct_answer": ["sqrt(2)", "-sqrt(2)"], "incorrect_answer": ["2"], "source": "synthetic"}

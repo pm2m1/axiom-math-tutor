@@ -41,14 +41,18 @@ base with measured BM25/dense/hybrid/Qdrant retrieval baselines, a Meta
 LLM evidence-sufficiency judge, a Tavily web-search fallback, a LangGraph
 workflow with an input guardrail and evidence-grounded answer generation,
 a React frontend that calls it for real, and persisted human feedback.
-Phase 2A/2B add a deterministic SymPy verification engine for
-single-variable linear/quadratic equations — no LLM involved — now
-surfaced to students two ways: checking a final candidate solution set
-(`/api/v1/verify`) and checking an ordered chain of reasoning steps,
-with first-error localization (`/api/v1/check-work`, Check My Work).
-Neither is wired into Tutor mode's LLM-generated explanations. See the
-table below, `docs/roadmap.md`'s Phase 1 acceptance checklist, and
-`docs/verification.md`.
+Phase 2A/2B/3 add a deterministic SymPy verification engine — no LLM
+involved — covering single-variable linear/quadratic equations,
+derivatives, indefinite integrals, and combinatorics/probability.
+Phase 3 adds a narrow, explicit-command router into Tutor mode
+(`"differentiate x^2"`, not general word problems), a misconception/
+hint ladder and real Practice mode built on it, and a benchmark harness
+run against a **synthetic, clearly-labeled, non-authentic** dataset — a
+genuine, rights-cleared JEE Main/Advanced dataset was not established
+(see `docs/jee-solving.md`'s "Benchmark provenance" for exactly why).
+None of this makes Tutor mode's LLM-generated explanations "verified."
+See the table below, `docs/roadmap.md`'s acceptance checklists, and
+`docs/verification.md` / `docs/jee-solving.md`.
 
 | Area | Status |
 | --- | --- |
@@ -56,14 +60,17 @@ table below, `docs/roadmap.md`'s Phase 1 acceptance checklist, and
 | Algebra knowledge base, chunking, BM25/dense/hybrid/Qdrant retrieval baselines | Implemented |
 | Guardrails, KB-first routing, web fallback | Implemented |
 | LangGraph agentic workflow, evidence-grounded answer generation | Implemented |
-| React frontend wired to `/api/v1/answer`; Tutor mode only | Implemented |
+| React frontend wired to `/api/v1/answer`; Tutor mode | Implemented |
 | Human feedback (thumbs up/down, optional correction, SQLite) | Implemented |
-| Deterministic SymPy verification (`/api/v1/verify`, linear/quadratic only) | Implemented |
-| Check My Work: step-by-step verification, first-error localization | Implemented |
-| Practice mode | Planned (Phase 3) |
+| Deterministic SymPy verification: equations, derivatives, integrals, combinatorics | Implemented |
+| Check My Work: step-by-step verification, first-error localization, hints, misconceptions | Implemented |
+| Practice mode: real problem generation/grading, mastery-driven | Implemented |
+| Deterministic command router into Tutor mode (explicit commands only) | Implemented |
+| Student mastery model (SQLite, pseudonymous, two skills) | Implemented |
+| Benchmark harness (metrics computation, frozen/dev split) | Implemented, synthetic data only |
+| Genuine JEE Main/Advanced dataset | Blocked — see `docs/jee-solving.md` |
+| End-to-end natural-language JEE word-problem solving | Not implemented |
 | Verification wired into Tutor's LLM explanations, confidence/abstention | Planned |
-| Student model, misconception diagnosis, hint ladder | Planned |
-| JEEBench / MathTutorBench evaluation | Planned |
 | Lean-based formal verification | Research direction |
 
 Retrieval quality against the current baseline is documented in
@@ -91,6 +98,7 @@ axiom-math-tutor/
     ├── agentic-workflow.md
     ├── feedback.md
     ├── verification.md
+    ├── jee-solving.md
     └── decisions/    Architecture decision records
 ```
 
@@ -108,11 +116,14 @@ uv run uvicorn axiom.main:app --reload
 
 The API serves `GET /health` and `GET /api/v1/status` on
 `http://localhost:8000`, plus `POST /api/v1/question`, `POST /api/v1/answer`,
-`POST /api/v1/feedback`, `POST /api/v1/verify`, and
-`POST /api/v1/check-work` — see `docs/evidence-routing.md`,
-`docs/agentic-workflow.md`, `docs/feedback.md`, and `docs/verification.md`.
-The two verification endpoints need no credentials and make no network
-call — they're pure local SymPy computation.
+`POST /api/v1/feedback`, `POST /api/v1/verify`, `POST /api/v1/check-work`,
+`POST /api/v1/verify-derivative`, `POST /api/v1/verify-integral`,
+`POST /api/v1/count`, `POST /api/v1/practice/next`,
+`POST /api/v1/practice/submit`, and `POST /api/v1/mastery/summary` — see
+`docs/evidence-routing.md`, `docs/agentic-workflow.md`, `docs/feedback.md`,
+`docs/verification.md`, and `docs/jee-solving.md`. Every verification/
+practice/mastery endpoint needs no credentials and makes no network
+call — pure local SymPy computation and SQLite.
 
 ### Frontend
 
@@ -124,10 +135,12 @@ npm run dev
 
 The dev server runs on `http://localhost:5173` and expects the API at
 `http://localhost:8000` (override with `VITE_API_BASE_URL`). A small status
-indicator in the top bar shows whether it can reach the API. Tutor mode
-calls `/api/v1/answer` for real; Check My Work calls `/api/v1/check-work`
-for real. Practice is shown disabled with a note explaining it needs
-Phase 3 work that doesn't exist yet.
+indicator in the top bar shows whether it can reach the API. All three
+modes are real: Tutor calls `/api/v1/answer`; Check My Work calls
+`/api/v1/check-work` (steps, hints, misconception labels); Practice
+calls `/api/v1/practice/next`/`submit` and `/api/v1/mastery/summary`,
+with a pseudonymous `learner_id` stored in browser `localStorage` (not
+an account — see `docs/jee-solving.md`).
 
 ### Environment variables
 
@@ -144,14 +157,16 @@ what each one is for — never commit real values):
 
 Both are read directly from the process environment (not loaded from
 `.env` automatically), so export them in the shell that starts
-`uvicorn`. `AXIOM_FEEDBACK_DB_PATH` optionally overrides where the
-feedback SQLite file is written (default: `.data/feedback.sqlite3` at
-the repo root).
+`uvicorn`. `AXIOM_FEEDBACK_DB_PATH` and `AXIOM_MASTERY_DB_PATH`
+optionally override where the feedback/mastery SQLite files are written
+(defaults: `.data/feedback.sqlite3` and `.data/mastery.sqlite3` at the
+repo root).
 
-### Inspecting the feedback database
+### Inspecting the feedback/mastery databases
 
 ```bash
 sqlite3 .data/feedback.sqlite3 "select * from feedback;"
+sqlite3 .data/mastery.sqlite3 "select * from mastery;"
 ```
 
 or, without the `sqlite3` CLI:
@@ -159,9 +174,22 @@ or, without the `sqlite3` CLI:
 ```bash
 cd apps/api
 uv run python -c "import sqlite3; c = sqlite3.connect('../../.data/feedback.sqlite3'); print(c.execute('select * from feedback').fetchall())"
+uv run python -c "import sqlite3; c = sqlite3.connect('../../.data/mastery.sqlite3'); print(c.execute('select * from mastery').fetchall())"
 ```
 
-See `docs/feedback.md` for the schema.
+See `docs/feedback.md` and `docs/jee-solving.md` for the schemas.
+
+### Benchmark harness
+
+```bash
+cd apps/api
+uv run python -m axiom.benchmark.harness --dataset dev
+uv run python -m axiom.benchmark.harness --dataset frozen
+```
+
+Runs against a small, hand-checked, **synthetic** (not real JEE)
+dataset — see `docs/jee-solving.md`'s "Benchmark provenance" before
+citing any number this prints.
 
 ### Knowledge base and retrieval baseline
 
@@ -218,9 +246,17 @@ npm run test    # vitest, offline — mocks the API client, no real backend call
   linear/quadratic equations, surfaced via final-answer checking and a
   real Check My Work step-by-step checker — are done; see
   `docs/verification.md`.)*
-- **Phase 3 — Adaptive tutoring**: student model, misconception diagnosis,
-  hint ladder, targeted remediation, prerequisite graph.
-- **Phase 4 — Evaluation and research**: JEEBench, a custom tutoring
-  benchmark, retrieval/tutoring evaluation, ablations, adversarial testing.
+- **Phase 3 — JEE-style reasoning, adaptive tutoring, benchmark
+  foundation** *(done, with documented gaps)*: derivative/integral/
+  combinatorics solvers, a narrow explicit-command router into Tutor
+  mode, misconception labels + hint ladder, a real student mastery
+  model, real Practice mode, and a benchmark harness — run against
+  synthetic data only, since a genuine JEE dataset couldn't be legally
+  established this phase. End-to-end natural-language JEE solving is
+  **not** implemented. See `docs/jee-solving.md`.
+- **Phase 4 — Evaluation and research**: a real JEEBench (or other
+  rights-cleared) dataset run through the existing harness, a custom
+  tutoring benchmark, retrieval/tutoring evaluation, ablations,
+  adversarial testing.
 
 Details and acceptance criteria are in [`docs/roadmap.md`](docs/roadmap.md).

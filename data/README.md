@@ -12,7 +12,10 @@ data/
 ├── corpus/
 │   └── algebra_chunks.jsonl   Normalized, chunked KB content (generated)
 └── evaluation/
-    └── algebra_retrieval.jsonl  Labeled retrieval queries (hand-checked)
+    ├── algebra_retrieval.jsonl                 Labeled retrieval queries (hand-checked)
+    ├── algebra_sufficiency*.jsonl               KB-sufficiency judge benchmarks (Phase 1G–1I, frozen)
+    ├── jee_style_synthetic_dev.jsonl            Solver/verifier regression set (Phase 3, synthetic)
+    └── jee_style_synthetic_frozen.jsonl         Solver/verifier regression set (Phase 3, synthetic, frozen)
 ```
 
 ## Corpus
@@ -51,4 +54,18 @@ source page's heading structure doesn't change.
 out-of-scope) against the current corpus. Every `relevant_chunk_ids` entry
 was checked by reading the actual chunk text, not generated and assumed
 correct — see `docs/retrieval-evaluation.md` for the labeling process and
-the measured baseline.
+the measured baseline. `algebra_sufficiency*.jsonl` are the frozen Phase
+1G–1I KB-sufficiency judge benchmarks — see `docs/kb-sufficiency.md`;
+**do not modify these.**
+
+### Phase 3 solver/verifier benchmark (synthetic, not real JEE)
+
+`evaluation/jee_style_synthetic_{dev,frozen}.jsonl` are small,
+hand-written, JEE-*style* equation/derivative/integral/combinatorics
+items (every record carries `"source": "synthetic"`) used by
+`axiom/benchmark/harness.py` to check the Phase 2A/2B/3 deterministic
+solvers' reliability. **These are not real JEE Main/Advanced questions
+and must never be described as such** — a genuine, rights-cleared JEE
+dataset could not be established; see `docs/jee-solving.md`'s
+"Benchmark provenance" section for the specific licensing reason and
+what would need to change to use a real dataset here instead.

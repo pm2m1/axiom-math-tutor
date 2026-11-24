@@ -28,28 +28,40 @@ Browser (React) --> FastAPI --> GET /health, GET /api/v1/status
                                    -> restricted AST parser (no eval/sympify-on-string)
                                    -> SymPy Poly/solveset, exact real-domain checking
                                    -> linear/quadratic only, no LLM involved
-                              -> POST /api/v1/check-work (Phase 2B)
+                              -> POST /api/v1/check-work (Phase 2B, + hints/misconceptions in Phase 3)
                                    -> same parser/solver, ordered student steps
                                    -> exact solution-set comparison per transition
                                    -> first provably-invalid step, independent of
                                       a separately-checked final answer
+                              -> POST /api/v1/verify-derivative, /verify-integral,
+                                 /count (Phase 3)
+                                   -> same engine, extended calculus parsing mode
+                                   -> exact diff/integrate/binomial, verified
+                                      independently of the computed reference value
+                              -> POST /api/v1/practice/{next,submit}, /mastery/summary (Phase 3)
+                                   -> hand-designed, re-verified problem templates
+                                   -> graded by the same engine as /verify
+                                   -> SQLite mastery, write-gated on decisive outcomes
 ```
 
-The React frontend now has two active modes. Tutor mode calls
-`/api/v1/answer` for real and renders its `kb`/`web`/`refused`/
-`abstained`/`unavailable` outcomes distinctly, with citations and a
-thumbs up/down + optional-correction feedback control posting to
-`/api/v1/feedback` (Phase 1L — see `docs/feedback.md`). Check My Work
-(Phase 2B — see `docs/verification.md`) calls `/api/v1/check-work` for
-real: ordered step inputs, an optional final answer, and a results view
-distinguishing equivalent/narrowing/broadening/partial-overlap/
+The React frontend now has three active modes. Tutor mode calls
+`/api/v1/answer` for real and renders its `kb`/`web`/`computed`/
+`refused`/`abstained`/`unavailable` outcomes distinctly (`"computed"`,
+Phase 3, is a deterministic problem-router match — see
+`docs/jee-solving.md`), with citations and a thumbs up/down +
+optional-correction feedback control posting to `/api/v1/feedback`
+(Phase 1L — see `docs/feedback.md`). Check My Work (Phase 2B/3 — see
+`docs/verification.md` and `docs/jee-solving.md`) calls
+`/api/v1/check-work` for real: ordered step inputs, an optional final
+answer, a progressive hint ladder, misconception labels, and a results
+view distinguishing equivalent/narrowing/broadening/partial-overlap/
 incompatible/unsupported/indeterminate transitions, with the first
-provably incorrect step flagged explicitly. Practice is shown disabled
-with an honest "not available yet" note rather than silently routed to
-an existing endpoint — it needs Phase 3 work that doesn't exist.
-`/api/v1/question` (Phase 1J, see `docs/evidence-routing.md`) still has
-no frontend caller; it exists for routing-only use. The backend's only
-persistence is Qdrant's vector store and the feedback SQLite file.
+provably incorrect step flagged explicitly. Practice (Phase 3) calls
+`/api/v1/practice/next`/`submit` and `/api/v1/mastery/summary` for
+real. `/api/v1/question` (Phase 1J, see `docs/evidence-routing.md`)
+still has no frontend caller; it exists for routing-only use. The
+backend's persistence is Qdrant's vector store, the feedback SQLite
+file, and now the mastery SQLite file.
 
 `POST /api/v1/verify` and `POST /api/v1/check-work` (Phase 2A/2B, see
 `docs/verification.md`) are the first real piece of the "Verifier" box
@@ -113,15 +125,24 @@ Student Model      Knowledge Layer (VectorDB + web fallback)
 in the diagram only so today's structure doesn't have to be redesigned if it
 gets added later.
 
-None of the boxes above `Math Solver` and below `Tutor Policy` exist yet,
-with one exception: a narrow slice of `Verifier` now exists as two
-standalone endpoints — `/api/v1/verify` (Phase 2A, final candidates) and
-`/api/v1/check-work` (Phase 2B, ordered reasoning chains) — exact
-checking for linear/quadratic equations, surfaced directly to the
-student via Check My Work, but still not wired into the `Problem
-Analyzer`/`Routing Engine`/`Misconception Diagnoser`/`Tutor Policy`
-boxes above and below it. The roadmap (`docs/roadmap.md`) sequences the
-rest.
+Several boxes now exist in narrow slices, none in the full form the
+diagram implies. `Math Solver`/`Verifier`: equations (`/api/v1/verify`,
+`/api/v1/check-work`), derivatives/integrals (`/verify-derivative`,
+`/verify-integral`), and combinatorics (`/count`) — all exact SymPy
+computation, Phase 2A/2B/3. `Problem Analyzer`/`Routing Engine`: a
+*deliberately narrow* slice — `axiom/problem_router.py` (Phase 3)
+recognizes a handful of explicit computation commands inside the
+existing LangGraph workflow and routes only those to the solvers above;
+it does not classify or route arbitrary JEE word problems, which is
+real `Problem Analyzer`/`Routing Engine` scope this phase does not
+claim. `Student Model`: `axiom/mastery.py` (Phase 3) — pseudonymous,
+SQLite, two skills. `Misconception Diagnoser`: four labels derived from
+Phase 2B's existing transitions (Phase 3), not a maintained taxonomy.
+`Tutor Policy`: the 4-level hint ladder gating full-solution disclosure
+behind an explicit request (Phase 3) — not mastery-gated hint
+selection, and not applied to Tutor mode's LLM explanations at all.
+See `docs/jee-solving.md` for exactly what each slice does and doesn't
+cover. The roadmap (`docs/roadmap.md`) sequences what's still missing.
 
 ## The core separation: solver, verifier, tutor
 

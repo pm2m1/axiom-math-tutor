@@ -4,6 +4,12 @@ import type {
   CheckWorkResponse,
   FeedbackRequest,
   FeedbackResponse,
+  MasterySummaryRequest,
+  MasterySummaryResponse,
+  NextProblemRequest,
+  NextProblemResponse,
+  SubmitAnswerRequest,
+  SubmitAnswerResponse,
 } from './types'
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -63,4 +69,25 @@ export function checkWork(
   signal?: AbortSignal,
 ): Promise<CheckWorkResponse> {
   return postJson<CheckWorkResponse>('/api/v1/check-work', request, signal)
+}
+
+export function nextPracticeProblem(
+  request: NextProblemRequest,
+  signal?: AbortSignal,
+): Promise<NextProblemResponse> {
+  return postJson<NextProblemResponse>('/api/v1/practice/next', request, signal)
+}
+
+export function submitPracticeAnswer(
+  request: SubmitAnswerRequest,
+  signal?: AbortSignal,
+): Promise<SubmitAnswerResponse> {
+  return postJson<SubmitAnswerResponse>('/api/v1/practice/submit', request, signal)
+}
+
+export function masterySummary(
+  request: MasterySummaryRequest,
+  signal?: AbortSignal,
+): Promise<MasterySummaryResponse> {
+  return postJson<MasterySummaryResponse>('/api/v1/mastery/summary', request, signal)
 }

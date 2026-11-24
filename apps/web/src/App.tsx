@@ -4,6 +4,7 @@ import { askQuestion, QUESTION_MAX_LENGTH } from './api/client'
 import { AnswerView, type AskResult } from './components/AnswerView'
 import { CheckWorkForm } from './components/CheckWorkForm'
 import { ModeSelector, type Mode } from './components/ModeSelector'
+import { PracticeForm } from './components/PracticeForm'
 import { StatusIndicator } from './components/StatusIndicator'
 
 const MODES: { id: Mode; label: string }[] = [
@@ -12,15 +13,9 @@ const MODES: { id: Mode; label: string }[] = [
   { id: 'practice', label: 'Practice' },
 ]
 
-// Tutor (grounded explanation) and Check my work (deterministic SymPy
-// step verification, Phase 2B) are implemented. Practice is a real
-// future mode, not silently routed to an existing backend — shown
-// disabled with an honest reason rather than faked.
-const UPCOMING_NOTE: Record<Mode, string | null> = {
-  tutor: null,
-  check: null,
-  practice: 'Practice needs adaptive problem generation (Phase 3) and is not available yet.',
-}
+// All three modes are implemented. Tutor is a grounded LLM
+// explanation; Check my work and Practice are both backed by the
+// deterministic SymPy engine, never an LLM judgment of correctness.
 
 function TutorForm() {
   const [question, setQuestion] = useState('')
@@ -81,8 +76,6 @@ function TutorForm() {
 function App() {
   const [mode, setMode] = useState<Mode>('tutor')
 
-  const upcomingNote = UPCOMING_NOTE[mode]
-
   function selectMode(nextMode: Mode) {
     setMode(nextMode)
   }
@@ -99,10 +92,9 @@ function App() {
 
         <ModeSelector modes={MODES} active={mode} onSelect={selectMode} />
 
-        {upcomingNote && <p className="mode-upcoming-note">{upcomingNote}</p>}
-
         {mode === 'tutor' && <TutorForm key="tutor" />}
         {mode === 'check' && <CheckWorkForm key="check" />}
+        {mode === 'practice' && <PracticeForm key="practice" />}
       </main>
     </div>
   )

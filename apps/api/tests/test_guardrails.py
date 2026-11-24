@@ -59,3 +59,11 @@ def test_does_not_false_positive_on_ordinary_use_of_the_word_ignore() -> None:
     # mathematical language and must not be rejected.
     result = classify_input("When solving this inequality, can I ignore the remainder term?")
     assert result.status == "accepted"
+
+
+def test_accepts_the_structured_problem_router_command_vocabulary() -> None:
+    # Phase 3's deterministic problem router (axiom/problem_router.py)
+    # issues commands using these exact words — the guardrail must not
+    # reject them before the router ever sees them.
+    assert classify_input("differentiate x^2").status == "accepted"
+    assert classify_input("integrate cos(x)").status == "accepted"

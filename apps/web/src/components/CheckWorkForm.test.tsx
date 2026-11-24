@@ -31,6 +31,7 @@ function baseResponse(overrides: Partial<CheckWorkResponse> = {}): CheckWorkResp
     deterministic: true,
     detail: 'every step preserves the original real solution set exactly',
     final_answer: null,
+    hints: null,
     ...overrides,
   }
 }
@@ -150,6 +151,7 @@ describe('CheckWorkForm', () => {
             category: 'linear',
             transition: 'equivalent',
             detail: 'this step preserves the real solution set',
+            misconception: null,
           },
           {
             index: 2,
@@ -157,6 +159,7 @@ describe('CheckWorkForm', () => {
             category: 'linear',
             transition: 'incompatible',
             detail: 'this step changes the solution set incompatibly with the previous equation',
+            misconception: null,
           },
         ],
       }),
@@ -187,6 +190,7 @@ describe('CheckWorkForm', () => {
             transition: 'partial_overlap',
             detail:
               'this step drops at least one previously valid solution while introducing a different, unverified one',
+            misconception: 'general_error',
           },
         ],
       }),
@@ -214,6 +218,7 @@ describe('CheckWorkForm', () => {
             category: 'linear',
             transition: 'narrowing',
             detail: 'this step removes one or more possible solutions',
+            misconception: 'lost_solution_branch',
           },
         ],
       }),
@@ -281,6 +286,7 @@ describe('CheckWorkForm', () => {
             category: 'unsupported',
             transition: 'unsupported',
             detail: "could not parse this step: unknown symbol 'y'",
+            misconception: null,
           },
         ],
       }),
@@ -302,5 +308,72 @@ describe('CheckWorkForm', () => {
     submit()
 
     expect(await screen.findByText(/could not reach the server/i)).toBeInTheDocument()
+  })
+
+  it('shows a misconception label for a step that has one', async () => {
+    vi.mocked(checkWork).mockResolvedValue(
+      baseResponse({
+        status: 'invalid_step_found',
+        first_invalid_step_index: 1,
+        steps: [
+          {
+            index: 1,
+            equation: 'x = -4',
+            category: 'linear',
+            transition: 'incompatible',
+            detail: 'this step changes the solution set incompatibly with the previous equation',
+            misconception: 'sign_error',
+          },
+        ],
+      }),
+    )
+
+    render(<CheckWorkForm />)
+    setEquation('2*x = 8')
+    submit()
+
+    expect(await screen.findByText(/sign error/i)).toBeInTheDocument()
+  })
+
+  it('requests level-1 hints on the first click and progresses on subsequent clicks', async () => {
+    vi.mocked(checkWork)
+      .mockResolvedValueOnce(baseResponse({ hints: ['Conceptual hint'] }))
+      .mockResolvedValueOnce(baseResponse({ hints: ['Conceptual hint', 'Directional hint'] }))
+
+    render(<CheckWorkForm />)
+    setEquation('2*x = 8')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get a hint' }))
+    expect(await screen.findByText('Conceptual hint')).toBeInTheDocument()
+    expect(checkWork).toHaveBeenCalledWith({ equation: '2*x = 8', steps: [], hint_level: 1 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Get another hint' }))
+    expect(await screen.findByText('Directional hint')).toBeInTheDocument()
+    expect(checkWork).toHaveBeenLastCalledWith({ equation: '2*x = 8', steps: [], hint_level: 2 })
+  })
+
+  it('disables the hint button once level 4 is reached', async () => {
+    vi.mocked(checkWork).mockResolvedValue(
+      baseResponse({ hints: ['L1', 'L2', 'L3', 'L4: the answer'] }),
+    )
+
+    render(<CheckWorkForm />)
+    setEquation('2*x = 8')
+    fireEvent.click(screen.getByRole('button', { name: 'Get a hint' }))
+
+    expect(await screen.findByText('L4: the answer')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Get another hint' })).toBeDisabled()
+  })
+
+  it('clears hints when the equation is edited', async () => {
+    vi.mocked(checkWork).mockResolvedValue(baseResponse({ hints: ['Conceptual hint'] }))
+
+    render(<CheckWorkForm />)
+    setEquation('2*x = 8')
+    fireEvent.click(screen.getByRole('button', { name: 'Get a hint' }))
+    expect(await screen.findByText('Conceptual hint')).toBeInTheDocument()
+
+    setEquation('3*x = 9')
+    expect(screen.queryByText('Conceptual hint')).not.toBeInTheDocument()
   })
 })
